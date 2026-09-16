@@ -1,0 +1,31 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== Virtual Environment =====
+venv/
+.venv/
+env/
+
+# ===== Environment Variables / Secrets =====
+.env
+
+# ===== Logs & OS =====
+*.log
+.DS_Store
+Thumbs.db
+reports/
+.vscode/
+rules/
+skills/
+
+/faiss_index/
+data/

@@ -1,0 +1,40 @@
+version: '3.8'
+services:
+  mcp-github:
+    image: node:20-alpine
+    command: sh -c "npm install -g @modelcontextprotocol/server-github && npx -y @modelcontextprotocol/server-github"
+    environment:
+      - GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_PERSONAL_ACCESS_TOKEN}
+    restart: unless-stopped
+
+  mcp-filesystem:
+    image: node:20-alpine
+    volumes:
+      - E:/:/data
+    command: sh -c "npm install -g @modelcontextprotocol/server-filesystem && npx -y @modelcontextprotocol/server-filesystem /data"
+    restart: unless-stopped
+
+  mcp-memory:
+    image: node:20-alpine
+    command: sh -c "npm install -g @modelcontextprotocol/server-memory && npx -y @modelcontextprotocol/server-memory"
+    restart: unless-stopped
+
+  mcp-sequential:
+    image: node:20-alpine
+    command: sh -c "npm install -g @modelcontextprotocol/server-sequential-thinking && npx -y @modelcontextprotocol/server-sequential-thinking"
+    restart: unless-stopped
+
+  # Remote MCP servers via mcp-remote proxy
+  mcp-context7:
+    image: node:20-alpine
+    command: sh -c "npm install -g mcp-remote && npx -y mcp-remote https://mcp.context7.com/mcp"
+    environment:
+      - CONTEXT7_API_KEY=${CONTEXT7_API_KEY}
+    restart: unless-stopped
+
+  mcp-firecrawl:
+    image: node:20-alpine
+    command: sh -c "npm install -g mcp-remote && npx -y mcp-remote https://mcp.firecrawl.dev/v2/mcp"
+    environment:
+      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
+    restart: unless-stopped

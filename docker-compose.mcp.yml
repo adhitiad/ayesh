@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   mcp-github:
     image: node:20-alpine
@@ -10,7 +9,7 @@ services:
   mcp-filesystem:
     image: node:20-alpine
     volumes:
-      - E:/:/data
+      - ${LOCAL_FS:-/data}:/data
     command: sh -c "npm install -g @modelcontextprotocol/server-filesystem && npx -y @modelcontextprotocol/server-filesystem /data"
     restart: unless-stopped
 

@@ -64,6 +64,19 @@ class MCPClientManager:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
 
+    def _resolve_env_in_args(self, args: list) -> list:
+        """Resolve ${VAR} di dalam args list (termasuk di dalam string)."""
+        import re
+        resolved = []
+        for arg in args:
+            if isinstance(arg, str) and "${" in arg:
+                def _replace(m):
+                    var_name = m.group(1)
+                    return os.getenv(var_name, m.group(0))
+                arg = re.sub(r'\$\{(\w+)\}', _replace, arg)
+            resolved.append(arg)
+        return resolved
+
     def _get_server_params(self, server_name: str) -> StdioServerParameters:
         """Mengambil parameter server dari config dan resolve env vars."""
         with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -78,7 +91,7 @@ class MCPClientManager:
         final_env = {**os.environ, **resolved_env}
 
         command = server_config["command"]
-        args = server_config["args"]
+        args = self._resolve_env_in_args(server_config["args"])
 
         # Windows wrapper untuk npx/uvx
         if os.name == "nt":

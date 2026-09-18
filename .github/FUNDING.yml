@@ -1,0 +1,9 @@
+# Tombol "Sponsor" di halaman repo. Ganti/isi sesuai akun Anda.
+# Lihat: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+github: [adhitiad]
+# Contoh platform lain (hapus komentar bila dipakai):
+# patreon: USERNAME
+# open_collective: PROJECT-SLUG
+# ko_fi: USERNAME
+# custom: ["https://saweria.co/USERNAME", "https://trakteer.id/USERNAME"]

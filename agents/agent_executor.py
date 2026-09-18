@@ -1,10 +1,9 @@
 """Agent Executor: Mengelola tool calling loop secara otomatis menggunakan LangGraph."""
 
-from typing import Annotated, Sequence
+from typing import Annotated, Sequence, AsyncIterator
 from typing_extensions import TypedDict
 import time
 
-# Patch redis to force RESP2 protocol for compatibility with old Redis server
 from core.redis_patch import apply_redis_patch
 apply_redis_patch()
 
@@ -15,7 +14,6 @@ from langgraph.prebuilt import ToolNode
 
 from agents.llm_config import get_llm
 from memory.memory import get_memory_for_session
-from tools.rag_engine import get_relevant_context
 from core.logger import setup_logger
 
 logger = setup_logger("agent_executor")
@@ -28,8 +26,20 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
 
+_graph_cache: dict = {}
+
+
+def _cache_key(system_prompt: str, tools: list) -> str:
+    tool_names = tuple(sorted(t.name for t in tools))
+    return f"{system_prompt}|{tool_names}"
+
+
 def create_agent_executor(system_prompt: str, tools: list):
-    """Membuat agent executor dengan LangGraph."""
+    """Membuat agent executor dengan LangGraph (cached per kombinasi prompt+tools)."""
+    key = _cache_key(system_prompt, tools)
+    if key in _graph_cache:
+        return _graph_cache[key]
+
     llm = get_llm()
 
     if tools:
@@ -51,7 +61,9 @@ def create_agent_executor(system_prompt: str, tools: list):
                 last_error = e
 
                 is_retryable = (
-                    "503" in error_msg
+                    "429" in error_msg
+                    or "Too Many Requests" in error_msg
+                    or "503" in error_msg
                     or "overloaded" in error_msg.lower()
                     or "timeout" in error_msg.lower()
                     or "timed out" in error_msg.lower()
@@ -60,12 +72,15 @@ def create_agent_executor(system_prompt: str, tools: list):
 
                 if is_retryable:
                     if attempt < MAX_RETRIES - 1:
-                        wait_time = RETRY_DELAY * (attempt + 1)
-                        logger.warning(f"NVIDIA API error (percobaan {attempt + 1}/{MAX_RETRIES}). Menunggu {wait_time} detik...")
+                        if "429" in error_msg or "Too Many Requests" in error_msg:
+                            wait_time = 15 * (attempt + 1)
+                        else:
+                            wait_time = RETRY_DELAY * (attempt + 1)
+                        logger.warning(f"API error (percobaan {attempt + 1}/{MAX_RETRIES}). Menunggu {wait_time} detik...")
                         time.sleep(wait_time)
                         continue
                     else:
-                        logger.error(f"NVIDIA API tetap gagal setelah {MAX_RETRIES} percobaan.")
+                        logger.error(f"API tetap gagal setelah {MAX_RETRIES} percobaan.")
                         return {"messages": [AIMessage(content="Maaf, layanan AI sedang sibuk atau timeout. Silakan coba lagi dalam beberapa menit.")]}
                 else:
                     raise e
@@ -95,7 +110,64 @@ def create_agent_executor(system_prompt: str, tools: list):
     else:
         graph.add_edge("agent", END)
 
-    return graph.compile()
+    compiled = graph.compile()
+    _graph_cache[key] = compiled
+    return compiled
+
+
+async def run_agent_executor_stream(
+    user_input: str,
+    session_id: str,
+    system_prompt: str,
+    tools: list,
+    context: str = "",
+) -> AsyncIterator[str]:
+    """Menjalankan agent executor dengan streaming token-level."""
+    memory = get_memory_for_session(session_id)
+
+    full_prompt = system_prompt
+    if context:
+        full_prompt += f"\n\nReferensi:\n{context}"
+
+    messages = [SystemMessage(content=full_prompt)]
+    messages.extend(memory.messages)
+    messages.append(HumanMessage(content=user_input))
+
+    executor = create_agent_executor(system_prompt, tools)
+
+    # Stream events dari graph
+    async for event in executor.astream_events({"messages": messages}, version="v2"):
+        kind = event.get("event")
+        if kind == "on_chat_model_stream":
+            chunk = event["data"]["chunk"]
+            if hasattr(chunk, "content") and chunk.content:
+                content = chunk.content
+                if isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            yield c.get("text", "")
+                elif isinstance(content, str):
+                    yield content
+        elif kind == "on_tool_start":
+            tool_name = event.get("name", "")
+            yield f"\n[tool: {tool_name}]"
+        elif kind == "on_tool_end":
+            yield "\n"
+
+    # Ambil final response untuk memori
+    result = await executor.ainvoke({"messages": messages})
+    final_message = result["messages"][-1]
+    try:
+        from core.usage import note_usage
+        note_usage(final_message)
+    except Exception:
+        pass
+    from core.text import extract_text
+    raw = final_message.content if hasattr(final_message, "content") else str(final_message)
+    ai_response = extract_text(raw)
+
+    memory.add_user_message(user_input)
+    memory.add_ai_message(ai_response)
 
 
 def run_agent_executor(
@@ -105,9 +177,7 @@ def run_agent_executor(
     tools: list,
     context: str = "",
 ) -> str:
-    """
-    Menjalankan agent executor dengan memori dan RAG.
-    """
+    """Menjalankan agent executor dengan memori dan RAG (sync, non-streaming)."""
     memory = get_memory_for_session(session_id)
 
     full_prompt = system_prompt
@@ -123,7 +193,13 @@ def run_agent_executor(
     result = executor.invoke({"messages": messages})
 
     final_message = result["messages"][-1]
-    ai_response = final_message.content if hasattr(final_message, "content") else str(final_message)
+    try:
+        from core.usage import note_usage
+        note_usage(final_message)
+    except Exception:
+        pass
+    from core.text import extract_text
+    ai_response = extract_text(final_message.content if hasattr(final_message, "content") else str(final_message))
 
     memory.add_user_message(user_input)
     memory.add_ai_message(ai_response)

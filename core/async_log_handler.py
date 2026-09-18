@@ -1,49 +1,47 @@
 import logging
-from logging import LogRecord
 from queue import Queue
 from threading import Thread
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
-import os
+from core.db_engine import get_engine
 from core.models import LogEntry
 
-load_dotenv()
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-log_engine = create_engine(DATABASE_URL)
-LogSession = sessionmaker(bind=log_engine)
+_engine = get_engine()
+_SessionLocal = sessionmaker(bind=_engine)
 
 class AsyncPostgresLogHandler(logging.Handler):
-    """Async logging handler using a background thread and queue."""
-    
+    """Async logging handler using a single global worker thread."""
+
+    _queue: Queue = Queue()
+    _worker_started = False
+
     def __init__(self):
         super().__init__()
-        self.queue = Queue()
-        self.worker = Thread(target=self._worker, daemon=True)
-        self.worker.start()
+        if not AsyncPostgresLogHandler._worker_started:
+            t = Thread(target=self._worker, daemon=True)
+            t.start()
+            AsyncPostgresLogHandler._worker_started = True
 
-    def emit(self, record: LogRecord) -> None:
+    def emit(self, record: logging.LogRecord) -> None:
         try:
-            self.queue.put_nowait(record)
+            self._queue.put_nowait(record)
         except Exception:
             pass
 
     def _worker(self):
         while True:
-            record = self.queue.get()
+            record = self._queue.get()
             if record is None:
                 break
             try:
-                with LogSession() as session:
+                with _SessionLocal() as session:
                     log_entry = LogEntry(
                         logger_name=record.name,
                         level=record.levelname,
-                        message=self.format(record)
+                        message=self.format(record),
                     )
                     session.add(log_entry)
                     session.commit()
             except Exception:
                 pass
             finally:
-                self.queue.task_done()
+                self._queue.task_done()

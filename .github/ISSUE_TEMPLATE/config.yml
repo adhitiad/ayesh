@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Tanya jawab & diskusi ide
+    url: https://github.com/adhitiad/ayesh/discussions
+    about: Untuk pertanyaan pakai, ide fitur, atau ngobrol — tanpa template
+  - name: Panduan pengguna (PANDUAN.md)
+    url: https://github.com/adhitiad/ayesh/blob/master/PANDUAN.md
+    about: Cara instal, konfigurasi, dan pemakaian sehari-hari

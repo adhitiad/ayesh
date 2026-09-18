@@ -1,0 +1,38 @@
+name: Minta fitur
+description: Usulkan fitur / skill / tool baru
+title: "[FITUR] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: masalah
+    attributes:
+      label: Masalah yang ingin diselesaikan
+      description: Ceritakan kebutuhan, bukan langsung solusi
+    validations:
+      required: true
+  - type: textarea
+    id: usulan
+    attributes:
+      label: Usulan solusi
+      description: Bagaimana kira-kira fiturnya bekerja? (agent, tools, endpoint)
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area terkait
+      options:
+        - Routing / agent
+        - Tools / MCP
+        - Skills / RAG
+        - API / Telegram
+        - Scheduler / tasks
+        - Observability / eval
+        - Dokumentasi
+        - Lainnya
+    validations:
+      required: true
+  - type: checkboxes
+    id: kesediaan
+    attributes:
+      label: Kontribusi
+      options:
+        - label: Saya bersedia mengerjakan ini lewat PR (lihat CONTRIBUTING.md)

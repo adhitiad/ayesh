@@ -1,0 +1,37 @@
+name: Laporkan bug
+description: Laporkan error / perilaku salah agar bisa diperbaiki
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: deskripsi
+    attributes:
+      label: Deskripsi bug
+      description: Apa yang terjadi vs yang seharusnya terjadi?
+      placeholder: "Contoh: /koding gagal dengan error ..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduksi
+    attributes:
+      label: Langkah reproduksi
+      description: Perintah / input persis agar bisa diulang
+      placeholder: |
+        1. POST /chat {"message": "..."}
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log relevan (SENSOR API key / token!)
+      description: Tempel potongan log secukupnya, hapus semua secrets
+      render: shell
+  - type: input
+    id: env
+    attributes:
+      label: Lingkungan
+      description: OS, versi Python, LLM_PROVIDER + LLM_MODEL yang dipakai
+      placeholder: Windows 11, Python 3.14.5, LLM_PROVIDER=openai
+    validations:
+      required: true

@@ -1,5 +1,40 @@
 import logging
+import re
 from core.async_log_handler import AsyncPostgresLogHandler
+
+_SECRET_PATTERNS = [
+    r"tavilyApiKey=[^&\s'\"]+",
+    r"tvly-[A-Za-z0-9_\-]+",
+    r"AIza[A-Za-z0-9_\-]{20,}",
+    r"gsk_[A-Za-z0-9]+",
+    r"nvapi-[\w.\-]+",
+    r"fr_[a-f0-9]{16,}",
+    r"ghp_[A-Za-z0-9]+",
+    r"github_pat_[A-Za-z0-9_]+",
+]
+_SECRET_RES = [re.compile(p) for p in _SECRET_PATTERNS]
+
+
+def redact_secrets(text: str) -> str:
+    """Ganti API key/token dengan ***. Pure, testable."""
+    for rx in _SECRET_RES:
+        text = rx.sub("***REDACTED***", text)
+    return text
+
+
+class _RedactSecrets(logging.Filter):
+    """Redaksi sebelum ke console maupun PostgreSQL."""
+
+    def filter(self, record):
+        try:
+            msg = record.getMessage()
+            red = redact_secrets(msg)
+            if red != msg:
+                record.msg = red
+                record.args = ()
+        except Exception:
+            pass
+        return True
 
 class ColoredFormatter(logging.Formatter):
     """Formatter dengan warna ANSI untuk level logging."""
@@ -41,6 +76,8 @@ def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """
     logger = logging.getLogger(name)
     logger.setLevel(level)
+    if not any(isinstance(f, _RedactSecrets) for f in logger.filters):
+        logger.addFilter(_RedactSecrets())
 
     # Hindari duplikasi handler
     if logger.handlers:

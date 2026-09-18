@@ -1,5 +1,3 @@
-from typing import List
-from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 from sqlalchemy import select, delete
 from sqlalchemy.orm import sessionmaker
 from core.db_engine import get_engine

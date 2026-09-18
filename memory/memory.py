@@ -1,6 +1,5 @@
 """Pengelola memori percakapan Hybrid Optimized (Redis + PostgreSQL)."""
 
-import os
 from dotenv import load_dotenv
 from memory.optimized_hybrid import OptimizedHybridMemory
 

@@ -1,0 +1,15 @@
+title: "[Ide] "
+labels: ["idea"]
+body:
+  - type: textarea
+    id: ide
+    attributes:
+      label: Ide kamu
+      description: Jelaskan ide fitur, skill, atau eksperimen prompt
+    validations:
+      required: true
+  - type: textarea
+    id: manfaat
+    attributes:
+      label: Manfaat yang diharapkan
+      description: Siapa terbantu dan bagaimana cara mengukurnya (mis. skor eval)

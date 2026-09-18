@@ -1,0 +1,16 @@
+title: "[Tanya] "
+labels: ["question"]
+body:
+  - type: textarea
+    id: pertanyaan
+    attributes:
+      label: Pertanyaan
+      description: Tulis pertanyaan sejelas mungkin (sertakan perintah yang dijalankan)
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Lingkungan (opsional)
+      description: OS, Python, LLM_PROVIDER — tanpa API key!
+      placeholder: Windows 11, Python 3.14.5, LLM_PROVIDER=groq

@@ -24,8 +24,35 @@ env/
 Thumbs.db
 reports/
 .vscode/
-rules/
-skills/
+ayesh/
+
+# ===== Agent harness lokal =====
+.kilo/
+
+# ===== Generated artifacts (jangan commit) =====
+tests/last_eval.json
+bandit-report.json
+.coverage
+coverage.xml
+*.orig
+*.rej
+htmlcov/
 
 /faiss_index/
 data/
+test_*response*.txt
+
+# ===== Biner & artefak besar (jangan commit) =====
+setup-fr.exe
+*.spec
+
+# ===== Database lokal & secrets (jangan commit) =====
+*.db
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+
+# ===== Artefak eval & pentest (jangan commit) =====
+tests/ab_results.json
+strix_runs/

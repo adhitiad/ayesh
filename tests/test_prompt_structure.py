@@ -123,8 +123,10 @@ class TestNativeTools(unittest.TestCase):
         self.assertEqual(get_native_tools(""), [])
 
     def test_parse_tiga_tools(self):
-        from agents.llm_config import get_native_tools
-        tools = get_native_tools("google_search, code_execution,url_context")
+        from agents import llm_config
+        with patch.object(llm_config, "LLM_PROVIDER", "google"), \
+                patch.object(llm_config, "_active_provider", "google"):
+            tools = llm_config.get_native_tools("google_search, code_execution,url_context")
         self.assertEqual(len(tools), 3)
 
     def test_nama_tak_dikenal_error(self):
@@ -138,9 +140,13 @@ class TestNativeTools(unittest.TestCase):
         self.assertIs(bind_native_tools(llm, ""), llm)
 
     def test_bind_dengan_tools_return_runnable(self):
-        from agents.llm_config import bind_native_tools, get_llm
-        llm = get_llm()
-        bound = bind_native_tools(llm, "google_search")
+        from agents import llm_config
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-3.5-flash-lite", google_api_key="test-dummy-key")
+        with patch.object(llm_config, "LLM_PROVIDER", "google"), \
+                patch.object(llm_config, "_active_provider", "google"):
+            bound = llm_config.bind_native_tools(llm, "google_search")
         self.assertIsNot(bound, llm)
         self.assertTrue(hasattr(bound, "invoke"))
 

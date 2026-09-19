@@ -1,26 +1,30 @@
-from fastapi import Depends
-from fastapi import Request, HTTPException
-from src.core.auth import (
-    require_auth,
-    require_admin,
-    require_owner,
-    require_owner_or_admin,
-    require_owner_only,
+"""FastAPI dependency injection helpers.
+
+Usage:
+    from src.api.dependencies import require_auth, require_admin
+
+    @router.get("/endpoint")
+    def my_endpoint(user_id: str = require_auth):
+        ...
+
+Note: These are currently unused — auth checks are done directly in route functions.
+Kept for future DI refactoring if needed.
+"""
+
+from src.core.auth.auth import (
     get_current_user_id,
+    require_admin,
+    require_auth,
+    require_owner,
+    require_owner_only,
+    require_owner_or_admin,
 )
-from src.core.db import connect
-from src.core.models import Session
 
-require_auth = Depends(require_auth)
-require_admin = Depends(require_admin)
-require_owner = Depends(require_owner)
-require_owner_or_admin = Depends(require_owner_or_admin)
-require_owner_only = Depends(require_owner_only)
-get_current_user_id = Depends(get_current_user_id)
-
-async def get_db():
-    db = connect()
-    try:
-        yield db
-    finally:
-        db.close()
+__all__ = [
+    "get_current_user_id",
+    "require_admin",
+    "require_auth",
+    "require_owner",
+    "require_owner_only",
+    "require_owner_or_admin",
+]

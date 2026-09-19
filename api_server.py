@@ -1,30 +1,25 @@
 import os
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from src.core.db_engine import get_engine
-from src.core.observability import health_check, get_metrics
-from src.config.rules import SUBAGENTS
-from src.api.routes import chat, feedback, agents, jobs, tasks, approvals, system
+
+from src.api.middleware import setup_middleware
+from src.api.models import ChatRequest, FeedbackRequest, JobRequest, TaskRequest, UserRequest  # noqa: F401
+
+# Export models for backward compatibility (tests import from api_server)
+from src.api.routes_agents import create_user_endpoint  # noqa: F401
+from src.api.routes_agents import router as agents_router
+from src.api.routes_approvals import router as approvals_router
 from src.api.routes_chat import router as chat_router
 from src.api.routes_feedback import router as feedback_router
-from src.api.routes_agents import router as agents_router
 from src.api.routes_jobs import router as jobs_router
-from src.api.routes_tasks import router as tasks_router
-from src.api.routes_approvals import router as approvals_router
 from src.api.routes_system import router as system_router
-from src.api.middleware import setup_middleware
-from src.core.scheduler import start_scheduler
-
-# Export models for backward compatibility
-from src.api.models import (
-    ChatRequest,
-    FeedbackRequest,
-    TaskRequest,
-    UserRequest,
-    JobRequest,
-)
-from src.api.routes_agents import create_user_endpoint
+from src.api.routes_tasks import router as tasks_router
+from src.config.rules import SUBAGENTS  # noqa: F401
+from src.core.db.db_engine import get_engine  # noqa: F401
+from src.core.observability.observability import get_metrics, health_check  # noqa: F401
+from src.core.scheduler.scheduler import start_scheduler
 
 
 @asynccontextmanager
@@ -37,17 +32,76 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Ayesh — Multi-Agent AI Orchestrator API",
     version="2.0",
-    description="Health check, feedback, memory, logs, metrics, dan chat",
+    description="""## Authentication
+
+Semua endpoint yang memerlukan auth mendukung **2 cara**:
+
+### 1. X-API-Key (Header)
+```
+X-API-Key: fr_abc123def456...
+```
+
+### 2. Authorization Bearer (Header)
+```
+Authorization: Bearer fr_abc123def456...
+```
+
+> Dapatkan API key via `POST /users` (hanya owner yang bisa membuat user).
+
+## Roles
+- **owner**: full access (users, jobs, approvals, logs, audit, analytics)
+- **admin**: operational (tasks, sessions, memory, chat, jobs, tasks)
+- **user**: chat, own sessions, own jobs, own tasks, own feedback
+""",
     lifespan=lifespan,
+    openapi_tags=[
+        {"name": "Chat", "description": "Chat dengan AI agent"},
+        {"name": "Users", "description": "Manajemen user & API key"},
+        {"name": "Jobs", "description": "Scheduled jobs (interval/harian)"},
+        {"name": "Tasks", "description": "Async task queue"},
+        {"name": "Sessions", "description": "Session & memory management"},
+        {"name": "Feedback", "description": "Feedback & learning"},
+        {"name": "System", "description": "Health, metrics, audit, logs"},
+        {"name": "Approvals", "description": "Human-in-the-loop approvals"},
+    ],
 )
+
+# OpenAPI security schemes — muncul di Swagger UI "Authorize" button
+app.openapi_schema = None  # force re-generate
+
+_original_openapi = app.openapi
+
+
+def _patched_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = _original_openapi()
+    schema["components"] = schema.get("components", {})
+    schema["components"]["securitySchemes"] = {
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "description": "API key dalam format `fr_xxxx...`. Dapatkan via POST /users.",
+        },
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "API Key",
+            "description": "Bearer token: `Authorization: Bearer fr_xxxxx...`",
+        },
+    }
+    # Global security — semua endpoint default pakai auth
+    schema["security"] = [{"ApiKeyAuth": []}, {"BearerAuth": []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _patched_openapi
 
 # P3.4 — CORS: explicit allowlist (never * with credentials)
 _allowed_origins = [
-    o.strip()
-    for o in os.getenv(
-        "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-    ).split(",")
-    if o.strip()
+    o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()
 ]
 
 app.add_middleware(

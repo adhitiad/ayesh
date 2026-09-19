@@ -16,7 +16,7 @@ import json
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -75,7 +75,7 @@ def run_case(case: dict, delay: float, judge: bool = False) -> dict:
                 time.sleep(delay)
             result = route_request(turn, sid)
             # Normalisasi: answer harus string (LangGraph bisa kembalikan list)
-            from src.core.text import extract_text
+            from src.core.llm.text import extract_text
             if isinstance(result.get("answer"), list):
                 result["answer"] = extract_text(result["answer"])
             out["process_times"].append(result.get("process_time"))
@@ -132,7 +132,7 @@ def main() -> int:
 
     summary = {s: sum(1 for r in results if r["status"] == s) for s in ("pass", "fail", "skipped")}
     report = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "summary": summary,
         "cases": results,
     }

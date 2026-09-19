@@ -1,24 +1,25 @@
 # Long term memory routing keywords via PostgreSQL
 # Fallback ke default jika Postgres tidak tersedia
 
-import os
 import json
+import os
 from functools import lru_cache
+from typing import Any
+
 from dotenv import load_dotenv
-from typing import Dict, List, Tuple, Any
 
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-DEFAULT_KEYWORDS: Dict[str, List[str]] = {
+DEFAULT_KEYWORDS: dict[str, list[str]] = {
     "coder_agent": ["kode", "program", "python", "script", "deploy"],
     "admin_agent": ["draf", "gaji", "upah", "surat", "izin"],
 }
 DEFAULT_AGENT = "casual_agent"
 
 
-def _load_from_file() -> Tuple[Dict[str, List[str]], str]:
+def _load_from_file() -> tuple[dict[str, list[str]], str]:
     return DEFAULT_KEYWORDS, DEFAULT_AGENT
 
 
@@ -34,7 +35,7 @@ def _upgrade_table_if_needed(cur):
         )
 
 
-def _migrate_file_data(cur, file_keywords: Dict[str, List[str]]):
+def _migrate_file_data(cur, file_keywords: dict[str, list[str]]):
     """Insert data default dari file ke Postgres jika tabel kosong."""
     cur.execute("SELECT COUNT(*) FROM routing_keywords;")
     count = cur.fetchone()[0]
@@ -63,7 +64,7 @@ def invalidate_routing_cache():
 
 
 @lru_cache(maxsize=1)
-def get_routing_keywords() -> Tuple[Dict[str, List[str]], str]:
+def get_routing_keywords() -> tuple[dict[str, list[str]], str]:
     """Return (keywords_dict, default_agent).
 
     keywords_dict format: {agent: [keyword1, keyword2, ...]}
@@ -93,7 +94,7 @@ def get_routing_keywords() -> Tuple[Dict[str, List[str]], str]:
             rows = cur.fetchall()
             conn.close()
 
-            keywords: Dict[str, List[str]] = {}
+            keywords: dict[str, list[str]] = {}
             for agent, kw in rows:
                 keywords.setdefault(agent, []).append(kw)
             _, default_agent = _load_from_file()
@@ -105,7 +106,7 @@ def get_routing_keywords() -> Tuple[Dict[str, List[str]], str]:
 
 
 @lru_cache(maxsize=1)
-def get_routing_keywords_with_tools() -> Tuple[Dict[str, Dict[str, Any]], str]:
+def get_routing_keywords_with_tools() -> tuple[dict[str, dict[str, Any]], str]:
     """Return format baru: {agent: {keyword: {allowed_tools: [...]}}}.
 
     Untuk tool filtering berbasis per-keyword.
@@ -136,7 +137,7 @@ def get_routing_keywords_with_tools() -> Tuple[Dict[str, Dict[str, Any]], str]:
             rows = cur.fetchall()
             conn.close()
 
-            result: Dict[str, Dict[str, Any]] = {}
+            result: dict[str, dict[str, Any]] = {}
             for agent, kw, tools in rows:
                 if agent not in result:
                     result[agent] = {}
@@ -155,7 +156,7 @@ def get_routing_keywords_with_tools() -> Tuple[Dict[str, Dict[str, Any]], str]:
     return result, default_agent
 
 
-def add_keyword_with_tools(agent: str, keyword: str, allowed_tools: List[str]) -> bool:
+def add_keyword_with_tools(agent: str, keyword: str, allowed_tools: list[str]) -> bool:
     """Insert atau update keyword beserta allowed_tools."""
     if not DATABASE_URL:
         return False

@@ -4,7 +4,7 @@ from pathlib import Path
 
 # Project root = parent of src/ (since this file is now in src/mcp_core/)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-SKILLS_DIR = _PROJECT_ROOT / "ayesh" / "skills"
+SKILLS_DIR = _PROJECT_ROOT / ".ayesh" / "skills"
 
 
 def _parse_skill_file(path: Path) -> dict | None:
@@ -37,19 +37,17 @@ def list_skills() -> list[dict]:
     if not SKILLS_DIR.exists():
         return []
     skills = []
-    for path in sorted(SKILLS_DIR.glob("*.md")):
+    for path in sorted(SKILLS_DIR.rglob("*.md")):
         parsed = _parse_skill_file(path)
         if parsed:
-            skills.append(
-                {"name": parsed["name"], "description": parsed.get("description", "")}
-            )
+            skills.append({"name": parsed["name"], "description": parsed.get("description", "")})
     return skills
 
 
 def load_skill(name: str) -> dict | None:
     """Muat satu skill by name. Return {name, description, body} atau None."""
     name = name.strip().lower()
-    for path in SKILLS_DIR.glob("*.md") if SKILLS_DIR.exists() else []:
+    for path in SKILLS_DIR.rglob("*.md") if SKILLS_DIR.exists() else []:
         parsed = _parse_skill_file(path)
         if parsed and parsed["name"].lower() == name:
             return parsed

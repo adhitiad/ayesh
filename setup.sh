@@ -54,7 +54,7 @@ else
 fi
 
 echo "== 5. Tabel & skills =="
-if python3 -c "from core.db_engine import get_engine; from core.models import Base; Base.metadata.create_all(get_engine())" 2>/dev/null; then
+if python3 -c "from src.core.db.db_engine import get_engine; from src.core.db.models import Base; Base.metadata.create_all(get_engine())" 2>/dev/null; then
   say_ok "tabel diverifikasi (aditif)"
 else
   say_bad "create_all gagal (cek DATABASE_URL di .env)"

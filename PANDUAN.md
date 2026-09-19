@@ -8,7 +8,7 @@ Panduan pakai sehari-hari (Bahasa Indonesia). Untuk dokumentasi developer, baca 
 |---|---|
 | API | `POST http://localhost:8080/chat` dengan `{"message": "..."}` |
 | Streaming | `POST /chat/stream` (status → hasil) atau `/chat/stream/tokens` (per token) |
-| Telegram | Set `TELEGRAM_BOT_TOKEN`, jalankan `python -m integrations.telegram`, chat bot |
+| Telegram | Set `TELEGRAM_BOT_TOKEN`, jalankan `python -m src.integrations.telegram`, chat bot |
 | Background | `POST /tasks` → 202, lalu `GET /tasks/{id}` untuk hasil |
 
 Jalankan server: `python api_server.py` (butuh PostgreSQL + Redis jalan).
@@ -96,7 +96,7 @@ pip install -r requirements.txt
 Copy-Item .env.example .env   # lalu isi kunci API (bagian 5)
 # PostgreSQL: buat database "agent" (pgAdmin / createdb -U postgres agent)
 # Redis: jalankan redis-server (WSL / Docker / installer Windows)
-python -c "from core.db_engine import get_engine; from core.models import Base; Base.metadata.create_all(get_engine())"
+python -c "from src.core.db.db_engine import get_engine; from src.core.db.models import Base; Base.metadata.create_all(get_engine())"
 python api_server.py
 ```
 **Linux (Debian/Ubuntu):**
@@ -107,17 +107,20 @@ pip install -r requirements.txt
 cp .env.example .env   # lalu isi kunci API
 sudo -u postgres createdb agent
 sudo systemctl enable --now postgresql redis-server
-python -c "from core.db_engine import get_engine; from core.models import Base; Base.metadata.create_all(get_engine())"
+python -c "from src.core.db.db_engine import get_engine; from src.core.db.models import Base; Base.metadata.create_all(get_engine())"
 python api_server.py
 ```
 
 ### 5. Kunci API (file `.env`, jangan commit)
 | Key | Status | Untuk |
 |---|---|---|
-| `GOOGLE_API_KEY` | **Wajib** (provider aktif) | LLM utama (`gemini-3.8-flash`) |
-| `NVIDIA_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | Opsional | Fallback sesuai `LLM_FALLBACK_ORDER` |
+| `GOOGLE_API_KEY` | **Disarankan** (gratis tier) | LLM utama (`gemini-3.8-flash`) |
+| `NVIDIA_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | Alternatif | Fallback sesuai `LLM_FALLBACK_ORDER` |
+| `ANTHROPIC_API_KEY` / `COHERE_API_KEY` / `DEEPSEEK_API_KEY` | Alternatif | Provider tambahan |
+| `MOONSHOT_API_KEY` / `MINIMAX_API_KEY` / `OPENROUTER_API_KEY` | Alternatif | Provider tambahan |
+| `XAI_API_KEY` / `ZAI_API_KEY` / `META_API_KEY` | Alternatif | Grok/GLM/Llama |
 | `TAVILY_API_KEY` + `EXA_API_KEY` | Wajib bila pakai riset web | `cari_web` + fallback |
-| `TELEGRAM_BOT_TOKEN` | Bila pakai bot | `python -m integrations.telegram` |
+| `TELEGRAM_BOT_TOKEN` | Bila pakai bot | `python -m src.integrations.telegram` |
 | `DATABASE_URL`, `REDIS_URL` | Wajib | Koneksi PG + Redis |
 
 ### 6. Konfigurasi penting (`.env`)
@@ -130,7 +133,7 @@ python api_server.py
 | `GOOGLE_NATIVE_TOOLS` | kosong | `google_search,code_execution,url_context` |
 | `PROMPT_VARIANT` | `full` | `no-sop` / `minimal` (A/B testing) |
 | `TELEGRAM_ALLOWED_IDS` | kosong (=terbuka) | Batasi chat ID bila diisi |
-| `LLM_PROVIDER` / `LLM_MODEL` / `LLM_TEMPERATURE` | google / gemini-3.8-flash / 0.7 | Otak agen |
+| `LLM_PROVIDER` / `LLM_MODEL` / `LLM_TEMPERATURE` | groq / llama-3.3-70b-versatile / 0.7 | Otak agen |
 
 ### 7. Batasan operasional
 - **Kuota LLM adalah bottleneck**, bukan spek mesin — 429 ditangani retry + fallback, tapi tetap melambat.

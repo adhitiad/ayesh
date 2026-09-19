@@ -7,7 +7,7 @@ di home directory (konvensi Cursor / agent lain):
 
 Script ini membaca definisi agent (*.md, format frontmatter ala Claude Code),
 menampilkannya sebagai pilihan, lalu menerapkan yang dipilih ke proyek ini
-sebagai skill invokable di ayesh/skills/ (dipakai via /nama-skill).
+sebagai skill invokable di .ayesh/skills/ (dipakai via /nama-skill).
 
 Pakai:
   python install_agents.py            # interaktif: pilih nomor
@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-SKILLS_DIR = PROJECT_ROOT / "ayesh" / "skills"
+SKILLS_DIR = PROJECT_ROOT / ".ayesh" / "skills"
 
 
 def agents_home(override: str | None = None) -> Path:
@@ -74,7 +74,7 @@ def slugify(name: str) -> str:
 
 
 def apply_agent(agent: dict) -> str:
-    """Terapkan satu agent sebagai skill ayesh/skills/<slug>.md. Return status."""
+    """Terapkan satu agent sebagai skill .ayesh/skills/<slug>.md. Return status."""
     slug = slugify(agent["name"])
     target = SKILLS_DIR / f"{slug}.md"
     if target.exists():
@@ -93,7 +93,7 @@ def apply_agent(agent: dict) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Install agent dari ~/.agents ke ayesh/skills/")
+    parser = argparse.ArgumentParser(description="Install agent dari ~/.agents ke .ayesh/skills/")
     parser.add_argument("--list", action="store_true", help="Hanya tampilkan daftar agent")
     parser.add_argument("--all", action="store_true", help="Terapkan semua tanpa konfirmasi")
     parser.add_argument("--pick", default="", help="Nomor pilihan, mis. '1,3'")
@@ -103,7 +103,9 @@ def main() -> int:
     home = agents_home(args.dir)
     print(f"Folder agents: {home}")
     if not home.exists():
-        print(f"Folder tidak ditemukan. Buatkan folder tersebut lalu isi file *.md definisi agent, contoh:\n  {home / 'reviewer.md'}")
+        print(
+            f"Folder tidak ditemukan. Buatkan folder tersebut lalu isi file *.md definisi agent, contoh:\n  {home / 'reviewer.md'}"
+        )
         return 1
 
     agents = scan_agents(home)

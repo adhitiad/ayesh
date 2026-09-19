@@ -1,0 +1,22 @@
+# Ruff configuration
+target-version = "py314"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "I", "S", "B", "A", "UP", "SIM", "RUF", "DTZ", "BLE", "PLW", "ISC"]
+ignore = [
+    "BLE001",   # Blind Exception — intentional fail-closed pattern
+    "E501",     # Line too long (handled by formatter)
+    "PLW0603",  # global statement — intentional for module-level singletons
+    "S104",     # Binding to all interfaces — intentional for API server
+    "S108",     # /tmp/ usage — intentional for error handling
+    "S603",     # subprocess call — input is controlled
+    "SIM105",   # contextlib.suppress — try-except-pass used where variable scope matters
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106", "S607", "PLW1510", "PLW2901", "E402", "RUF012"]
+"ops/*" = ["S608", "S110", "DTZ005"]
+"install_agents.py" = ["PLW2901"]
+"manage_keywords.py" = ["E402"]
+"setup.py" = ["S112"]

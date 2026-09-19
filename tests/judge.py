@@ -39,7 +39,7 @@ def judge_answer(question: str, answer: str) -> dict:
     prompt = f"{RUBRIC}\nPertanyaan: {question[:800]}\nJawaban: {answer[:3000]}"
     try:
         response = llm.invoke(prompt)
-        from src.core.text import extract_text
+        from src.core.llm.text import extract_text
         text = extract_text(response.content if hasattr(response, "content") else str(response))
         return parse_judge_output(text)
     except Exception as e:

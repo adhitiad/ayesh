@@ -1,10 +1,14 @@
-from fastapi import APIRouter
-from fastapi import Request, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+
+from main import route_request
 from src.api.models import JobRequest
-from src.core.auth import require_auth
-from src.core.scheduler import create_job, list_jobs, delete_job, set_enabled, list_jobs
+from src.core.auth.auth import require_auth
+from src.core.db.db import connect
+from src.core.scheduler.scheduler import create_job, delete_job, list_jobs, set_enabled
+from src.core.system.error_handling import generate_request_id, log_internal_error
 
 router = APIRouter()
+
 
 @router.post("/jobs")
 def create_job_endpoint(request: Request, req: JobRequest):
@@ -19,12 +23,14 @@ def create_job_endpoint(request: Request, req: JobRequest):
             owner_user_id=owner_user_id,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
 
 @router.get("/jobs")
 def list_jobs_endpoint(request: Request):
     owner_user_id = require_auth(request)
     return list_jobs(user_id=owner_user_id)
+
 
 @router.delete("/jobs/{job_id}")
 def delete_job_endpoint(request: Request, job_id: str):
@@ -33,12 +39,14 @@ def delete_job_endpoint(request: Request, job_id: str):
         raise HTTPException(status_code=404, detail="Job tidak ditemukan")
     return {"status": "deleted", "id": job_id}
 
+
 @router.patch("/jobs/{job_id}")
 def toggle_job_endpoint(request: Request, job_id: str, enabled: bool = True):
     owner_user_id = require_auth(request)
     if not set_enabled(job_id, enabled, owner_user_id):
         raise HTTPException(status_code=404, detail="Job tidak ditemukan")
     return {"status": "ok", "id": job_id, "enabled": enabled}
+
 
 @router.post("/jobs/{job_id}/run")
 def run_job_once(request: Request, job_id: str):
@@ -47,10 +55,6 @@ def run_job_once(request: Request, job_id: str):
     if not jobs:
         raise HTTPException(status_code=404, detail="Job tidak ditemukan")
     # Ambil prompt penuh dari DB lalu eksekusi sekali
-    from src.core.db import connect
-    from main import route_request
-    from src.core.error_handling import generate_request_id, log_internal_error
-
     conn = connect()
     cur = conn.cursor()
     cur.execute(
@@ -70,4 +74,4 @@ def run_job_once(request: Request, job_id: str):
         raise HTTPException(
             status_code=500,
             detail={"error": "internal_error", "request_id": request_id},
-        )
+        ) from e

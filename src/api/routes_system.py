@@ -1,17 +1,18 @@
-from fastapi import APIRouter
-from fastapi import Request, HTTPException
-from src.core.auth import require_auth, require_admin, require_owner
-from src.core.observability import health_check, get_metrics
-from src.core.analytics import generate_report
-from src.core.audit import verify_audit_chain
-from src.core.usage import summarize_usage
-from src.core.db import connect
-from src.core.usage import _ensure_table
-from src.config.routing_keywords_pg import get_routing_keywords
-from sqlalchemy.orm import sessionmaker
-from src.core.models import Feedback, SessionMemory, LogEntry, Session
-from src.core.db_engine import get_engine
 from datetime import datetime
+
+from fastapi import APIRouter, HTTPException, Request
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import sessionmaker
+
+from src.config.routing_keywords_pg import get_routing_keywords
+from src.core.auth.audit import verify_audit_chain
+from src.core.auth.auth import require_admin, require_auth, require_owner
+from src.core.db.db import connect
+from src.core.db.db_engine import get_engine
+from src.core.db.models import Feedback, LogEntry, Session, SessionMemory
+from src.core.observability.analytics import generate_report
+from src.core.observability.observability import get_metrics, health_check
+from src.core.observability.usage import _ensure_table, summarize_usage
 
 router = APIRouter()
 
@@ -49,7 +50,7 @@ def list_audit(request: Request, limit: int = 50):
     require_admin(request)
     conn = connect()
     cur = conn.cursor()
-    from src.core.audit import _ensure_table
+    from src.core.auth.audit import _ensure_table
 
     _ensure_table(cur)
     conn.commit()
@@ -116,9 +117,7 @@ def feedback_stats(request: Request):
     require_admin(request)
     with _SessionLocal() as db:
         results = db.execute(
-            select(
-                Feedback.agent_type, func.avg(Feedback.rating), func.count()
-            ).group_by(Feedback.agent_type)
+            select(Feedback.agent_type, func.avg(Feedback.rating), func.count()).group_by(Feedback.agent_type)
         ).all()
     stats = {}
     for agent, avg_rating, count in results:
@@ -130,13 +129,7 @@ def feedback_stats(request: Request):
 def feedback_recent(request: Request, limit: int = 10):
     require_admin(request)
     with _SessionLocal() as db:
-        results = (
-            db.execute(
-                select(Feedback).order_by(Feedback.created_at.desc()).limit(limit)
-            )
-            .scalars()
-            .all()
-        )
+        results = db.execute(select(Feedback).order_by(Feedback.created_at.desc()).limit(limit)).scalars().all()
     return [
         {
             "session_id": r.session_id,
@@ -176,6 +169,7 @@ def list_sessions(request: Request, limit: int = 50):
 
 @router.get("/sessions/{session_id}")
 def get_session(request: Request, session_id: str):
+    require_auth(request)
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
     if not sess:
@@ -197,9 +191,10 @@ def get_session(request: Request, session_id: str):
 def update_session_info(
     request: Request,
     session_id: str,
-    nama: str = None,
-    context: str = None,
+    nama: str | None = None,
+    context: str | None = None,
 ):
+    require_auth(request)
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
@@ -209,13 +204,14 @@ def update_session_info(
             sess.nama = nama
         if context is not None:
             sess.context = context
-        sess.updated_at = datetime.utcnow()
+        sess.updated_at = datetime.now(datetime.timezone.utc)
         db.commit()
     return {"status": "ok", "session_id": session_id}
 
 
 @router.get("/sessions/{session_id}/chat")
 def get_session_chat(request: Request, session_id: str, limit: int = 50):
+    require_auth(request)
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
@@ -232,9 +228,7 @@ def get_session_chat(request: Request, session_id: str, limit: int = 50):
 
     history = []
     for msg in reversed(messages):
-        history.append(
-            {"role": msg.role, "content": msg.content, "timestamp": str(msg.timestamp)}
-        )
+        history.append({"role": msg.role, "content": msg.content, "timestamp": str(msg.timestamp)})
 
     return {
         "session_id": session_id,
@@ -248,6 +242,7 @@ def get_session_chat(request: Request, session_id: str, limit: int = 50):
 
 @router.get("/memory/{session_id}")
 def get_memory(request: Request, session_id: str, limit: int = 50):
+    require_auth(request)
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
@@ -263,14 +258,12 @@ def get_memory(request: Request, session_id: str, limit: int = 50):
             .scalars()
             .all()
         )
-    return [
-        {"role": r.role, "content": r.content[:200], "timestamp": str(r.timestamp)}
-        for r in results
-    ]
+    return [{"role": r.role, "content": r.content[:200], "timestamp": str(r.timestamp)} for r in results]
 
 
 @router.delete("/memory/{session_id}")
 def clear_memory(request: Request, session_id: str):
+    require_auth(request)
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
@@ -282,16 +275,13 @@ def clear_memory(request: Request, session_id: str):
 
 
 @router.get("/logs")
-def get_logs(request: Request, level: str = None, limit: int = 50):
+def get_logs(request: Request, level: str | None = None, limit: int = 50):
     require_admin(request)
     with _SessionLocal() as db:
         stmt = select(LogEntry).order_by(LogEntry.timestamp.desc()).limit(limit)
         if level:
             stmt = (
-                select(LogEntry)
-                .where(LogEntry.level == level.upper())
-                .order_by(LogEntry.timestamp.desc())
-                .limit(limit)
+                select(LogEntry).where(LogEntry.level == level.upper()).order_by(LogEntry.timestamp.desc()).limit(limit)
             )
         results = db.execute(stmt).scalars().all()
     return [

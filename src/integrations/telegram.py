@@ -1,6 +1,6 @@
 """Telegram bot interface untuk agen (aiogram 3.x).
 
-Jalankan:  TELEGRAM_BOT_TOKEN=xxx python -m integrations.telegram
+Jalankan:  TELEGRAM_BOT_TOKEN=xxx python -m src.integrations.telegram
   - Tiap chat_id → session tg_<chat_id>
   - /start → sapaan; /bantuan → daftar; teks lain → route_request
   - Jawaban panjang dipecah per 4000 karakter
@@ -138,9 +138,7 @@ async def amain() -> None:
     if _is_dev_mode():
         import logging
 
-        logging.getLogger(__name__).warning(
-            "TELEGRAM_DEV=1 active: ALL chat IDs allowed. Do NOT use in production."
-        )
+        logging.getLogger(__name__).warning("TELEGRAM_DEV=1 active: ALL chat IDs allowed. Do NOT use in production.")
     bot = Bot(token=token)
     await dp.start_polling(bot)
 

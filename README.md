@@ -36,16 +36,25 @@ curl -X POST http://127.0.0.1:8080/chat \
 | `main.py` | Thin re-export layer (Redis patch + re-exports `route_request`, `get_quarantined_tools`, `learn_from_feedback`) |
 | `api_server.py` | REST API + SSE streaming |
 | `setup.py` | Bootstrap: cek prasyarat, install deps, buat tabel |
-| `src/core/` | **Semua logika inti**: routing, rate limiter, tool filtering, intent detection, skill parsing, learning, fan-out, commands, LLM shortcut, session, scheduler, tasks, auth, approval, audit, usage, monologue, workspaces, rate limit, db, logger, analytics, observability, error handling |
+| `src/core/routing/` | Routing engine, intent detection, skill parsing, fan-out, tool filtering, commands |
+| `src/core/auth/` | Multi-user API keys, HITL approval, audit hash-chain |
+| `src/core/observability/` | Logging, metrics, analytics, usage tracking |
+| `src/core/db/` | Database engine, ORM models, centralized connect |
+| `src/core/llm/` | LLM shortcut, text normalizer |
+| `src/core/memory/` | Learning, monologue, session helpers |
+| `src/core/scheduler/` | Scheduled jobs, async task queue |
+| `src/core/system/` | Sysinfo, workspaces, rate limiter, error handling, Redis patch |
+| `src/api/` | FastAPI routes (chat, feedback, agents, jobs, tasks, approvals, system) + models + middleware |
 | `src/cli/` | CLI demo entry point (`python -m src.cli.demo`) |
-| `src/agents/` | Eksekutor LangGraph + konfigurasi LLM multi-provider |
-| `src/mcp_core/` | Registry prompt, skills, RAG, validasi tool, client |
+| `src/agents/` | LangGraph eksekutor + LLM multi-provider config |
+| `src/mcp_core/` | Registry prompt, skills, RAG, tool validation, MCP client |
 | `src/memory/` | Riwayat chat hybrid Redis + Postgres + summarizer |
-| `src/plugins/` | Definisi tool nyata (`tulis_kode`, `cari_web`, …) |
-| `src/integrations/` | Bot Telegram, integrasi eksternal |
-| `src/config/` | Rules, routing keywords |
-| `ayesh/` | Skill & SOP markdown (di-ignore git; install via `install_agents.py`) |
-| `tests/` | Tes struktur (cepat) + eval end-to-end 26 kasus |
+| `src/plugins/` | Definisi tool nyata (`tulis_kode`, `cari_web`, ...) + input guard |
+| `src/integrations/` | Bot Telegram |
+| `src/config/` | Rules, routing keywords (DB-backed) |
+| `src/ops/` | Backup/restore, data retention |
+| `.ayesh/` | Skill & SOP markdown (install via `install_agents.py`) |
+| `tests/` | 298 tes (cepat) + eval end-to-end + security regression |
 
 ## Dokumentasi
 
@@ -53,10 +62,11 @@ curl -X POST http://127.0.0.1:8080/chat \
 - [`AGENTS.md`](AGENTS.md) — arsitektur & quirks untuk developer.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — cara berkontribusi, lapor bug, minta fitur.
 
-## Tes
+## Tes & Linting
 
 ```bash
-python -m unittest discover -s tests   # cepat, wajib lolos tiap ubah prompt
+python -m unittest discover -s tests   # 298 tes cepat, wajib lolos tiap ubah prompt
+ruff check .                            # linting (config di .ruff.toml)
 python -m tests.run_eval               # end-to-end (butuh PG + Redis + LLM)
 ```
 

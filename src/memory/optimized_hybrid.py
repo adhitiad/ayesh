@@ -1,15 +1,16 @@
+import os
 import threading
 import time
+
 import redis
-from typing import List
-from langchain_core.chat_history import BaseChatMessageHistory
-from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
-from sqlalchemy import select, delete
-from sqlalchemy.orm import sessionmaker
-import os
 from dotenv import load_dotenv
-from src.core.models import SessionMemory
-from src.core.db_engine import get_engine, with_retry
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from sqlalchemy import delete, select
+from sqlalchemy.orm import sessionmaker
+
+from src.core.db.db_engine import get_engine, with_retry
+from src.core.db.models import SessionMemory
 from src.memory.summarizer import summarize_session
 
 load_dotenv()
@@ -22,6 +23,7 @@ SessionLocal = sessionmaker(bind=engine)
 
 class ResilientRedisClient:
     """Redis client dengan retry/backoff dan circuit breaker."""
+
     def __init__(self, url: str, max_retries=3, base_delay=0.2, max_delay=2.0):
         self.url = url
         self.max_retries = max_retries
@@ -35,7 +37,12 @@ class ResilientRedisClient:
 
     def _get_client(self):
         if self._client is None:
-            self._client = redis.from_url(self.url, decode_responses=True, socket_timeout=5, socket_connect_timeout=5)
+            self._client = redis.from_url(
+                self.url,
+                decode_responses=True,
+                socket_timeout=5,
+                socket_connect_timeout=5,
+            )
         return self._client
 
     def _circuit_check(self):
@@ -48,7 +55,7 @@ class ResilientRedisClient:
 
     def _execute_with_retry(self, func, *args, **kwargs):
         self._circuit_check()
-        last_error = None
+        last_error: Exception = redis.ConnectionError("retry failed")
         for attempt in range(self.max_retries):
             try:
                 return func(*args, **kwargs)
@@ -59,7 +66,7 @@ class ResilientRedisClient:
                 if self._failure_count >= 5:
                     self._circuit_open = True
                 if attempt < self.max_retries - 1:
-                    delay = min(self.base_delay * (2 ** attempt), self.max_delay)
+                    delay = min(self.base_delay * (2**attempt), self.max_delay)
                     time.sleep(delay)
                     # Reset client on connection error
                     if "Connection" in str(e):
@@ -96,22 +103,31 @@ _redis_client = ResilientRedisClient(REDIS_URL)
 
 class ResilientRedisChatMessageHistory:
     """Wrapper RedisChatMessageHistory dengan retry/backoff."""
+
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.key = f"chat_history:{session_id}"
 
     def add_message(self, message):
         from langchain_core.messages import AIMessage, HumanMessage
-        role = "assistant" if isinstance(message, AIMessage) else ("user" if isinstance(message, HumanMessage) else "system")
+
+        role = (
+            "assistant"
+            if isinstance(message, AIMessage)
+            else ("user" if isinstance(message, HumanMessage) else "system")
+        )
         import json
+
         msg_data = json.dumps({"role": role, "content": message.content})
         _redis_client.lpush(self.key, msg_data)
         _redis_client.expire(self.key, 86400)  # 24h TTL
 
     @property
     def messages(self):
-        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
         import json
+
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
         try:
             raw = _redis_client.lrange(self.key, 0, -1)
             msgs = []
@@ -140,10 +156,11 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
     - PostgreSQL: Long-term archive via periodic flush / lazy sync.
     - Auto Summarization: History diringkas otomatis saat threshold tercapai.
     """
+
     def __init__(self, session_id: str, flush_interval=60):
         self.session_id = session_id
         self.redis = ResilientRedisChatMessageHistory(session_id=session_id)
-        self._pending_messages: List[BaseMessage] = []
+        self._pending_messages: list[BaseMessage] = []
         self._last_flush = time.time()
         self.flush_interval = flush_interval
         self._lock = threading.Lock()
@@ -156,23 +173,21 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
         with self._lock:
             if not self._pending_messages:
                 return
-            
+
             with SessionLocal() as session:
                 for msg in self._pending_messages:
                     role = "assistant" if isinstance(msg, AIMessage) else "user"
                     if isinstance(msg, SystemMessage):
                         role = "system"
                     new_mem = SessionMemory(
-                        session_id=self.session_id,
-                        role=role,
-                        content=msg.content
+                        session_id=self.session_id, role=role, content=msg.content
                     )
                     session.add(new_mem)
                 session.commit()
-            
+
             self._pending_messages.clear()
             self._last_flush = time.time()
-            
+
             # Auto summarization check
             summarize_session(self.session_id)
 
@@ -182,11 +197,11 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
             self.redis.add_message(message)
         except redis.RedisError:
             pass  # Graceful degrade - PG akan handle
-        
+
         # Buffer message for Postgres
         with self._lock:
             self._pending_messages.append(message)
-            
+
         # Flush if interval reached
         if self._should_flush():
             self._flush_to_postgres()
@@ -199,7 +214,9 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
         except redis.RedisError:
             pass
         with SessionLocal() as session:
-            session.execute(delete(SessionMemory).where(SessionMemory.session_id == self.session_id))
+            session.execute(
+                delete(SessionMemory).where(SessionMemory.session_id == self.session_id)
+            )
             session.commit()
         self._pending_messages.clear()
 
@@ -212,7 +229,11 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
         self._flush_to_postgres()
         summarize_session(self.session_id)
         with SessionLocal() as session:
-            stmt = select(SessionMemory).where(SessionMemory.session_id == self.session_id).order_by(SessionMemory.timestamp)
+            stmt = (
+                select(SessionMemory)
+                .where(SessionMemory.session_id == self.session_id)
+                .order_by(SessionMemory.timestamp)
+            )
             rows = session.execute(stmt).scalars().all()
         try:
             self.redis.clear()
@@ -233,7 +254,7 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
         return ""
 
     @property
-    def messages(self) -> List[BaseMessage]:
+    def messages(self) -> list[BaseMessage]:
         # Check Redis first
         try:
             redis_msgs = self.redis.messages
@@ -241,10 +262,14 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
                 return redis_msgs
         except redis.RedisError:
             pass
-        
+
         # Fallback to Postgres
         with SessionLocal() as session:
-            stmt = select(SessionMemory).where(SessionMemory.session_id == self.session_id).order_by(SessionMemory.timestamp)
+            stmt = (
+                select(SessionMemory)
+                .where(SessionMemory.session_id == self.session_id)
+                .order_by(SessionMemory.timestamp)
+            )
             results = session.execute(stmt).scalars().all()
             msgs = []
             for r in results:

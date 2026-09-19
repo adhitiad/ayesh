@@ -39,11 +39,11 @@ def _host_python() -> str | None:
         # which bisa kena stub Microsoft Store — buktikan bisa jalan
         try:
             args = [path, "--version"] if cmd != "py" else [path, "-3", "--version"]
-            r = subprocess.run(args, capture_output=True, timeout=15)
+            r = subprocess.run(args, capture_output=True, timeout=15, check=False)
             if r.returncode == 0:
                 return path
         except Exception:
-            continue  # next python candidate
+            continue
     return None
 
 
@@ -52,7 +52,7 @@ def load_env_file(path: Path) -> dict:
     if not path.exists():
         return env
     for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+        line = line.strip()  # noqa: PLW2901
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
@@ -79,9 +79,7 @@ def main() -> int:
     in_venv = sys.prefix != sys.base_prefix
     log(
         in_venv,
-        "venv aktif"
-        if in_venv
-        else "venv TIDAK aktif (disarankan: python -m venv venv)",
+        "venv aktif" if in_venv else "venv TIDAK aktif (disarankan: python -m venv venv)",
     )
     if not (args.check_only or args.yes) and not in_venv:
         try:
@@ -108,6 +106,7 @@ def main() -> int:
             cwd=ROOT,
             capture_output=True,
             text=True,
+            check=False,
         )
         ok_all &= log(r.returncode == 0, "pip install -r requirements.txt")
         if r.returncode != 0:
@@ -167,10 +166,10 @@ def main() -> int:
 
     print("== 5. Tabel database ==")
     try:
-        from src.core.models import Base
-
         # buat engine dari DATABASE_URL .env (bukan env proses, agar setup deterministik)
         from sqlalchemy import create_engine as _ce
+
+        from src.core.db.models import Base
 
         eng = _ce(env.get("DATABASE_URL", ""), pool_pre_ping=True)
         Base.metadata.create_all(eng)
@@ -179,15 +178,10 @@ def main() -> int:
         ok_all &= log(False, f"create_all gagal: {str(e)[:150]}")
 
     print("== 6. Skills ==")
-    skills = (
-        list((ROOT / "ayesh" / "skills").glob("*.md"))
-        if (ROOT / "ayesh" / "skills").exists()
-        else []
-    )
+    skills = list((ROOT / ".ayesh" / "skills").glob("*.md")) if (ROOT / ".ayesh" / "skills").exists() else []
     log(
         bool(skills),
-        f"{len(skills)} skill di ayesh/skills/"
-        + ("" if skills else " — isi via: python install_agents.py"),
+        f"{len(skills)} skill di .ayesh/skills/" + ("" if skills else " — isi via: python install_agents.py"),
     )
     if not skills:
         print("     (boleh kosong; sistem tetap jalan dengan 0 skill invokable)")

@@ -1,13 +1,12 @@
-from fastapi import APIRouter
-from fastapi import Request, HTTPException
-from src.api.models import FeedbackRequest
-from main import route_request
-from src.core.auth import require_auth, require_admin
-from src.core.learning import learn_from_feedback
-from src.core.audit import append_audit
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.orm import sessionmaker
-from src.core.models import Feedback
-from src.core.db_engine import get_engine
+
+from src.api.models import FeedbackRequest
+from src.core.auth.audit import append_audit
+from src.core.auth.auth import require_auth
+from src.core.db.db_engine import get_engine
+from src.core.db.models import Feedback
+from src.core.memory.learning import learn_from_feedback
 
 router = APIRouter()
 
@@ -16,7 +15,7 @@ _SessionLocal = sessionmaker(bind=get_engine())
 
 @router.post("/feedback")
 def submit_feedback(req: FeedbackRequest, request: Request):
-    user_id = require_auth(request)
+    require_auth(request)
     if not (1 <= req.rating <= 5):
         raise HTTPException(status_code=400, detail="rating harus 1-5")
     if req.corrected_agent and req.corrected_agent not in {

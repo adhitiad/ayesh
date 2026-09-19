@@ -92,8 +92,8 @@ jobs:
       - name: Run database migrations
         run: |
           python -c "
-          from core.db_engine import get_engine
-          from core.models import Base
+          from src.core.db.db_engine import get_engine
+          from src.core.db.models import Base
           Base.metadata.create_all(get_engine())
           print('DB schema created')
           "
@@ -154,8 +154,8 @@ jobs:
       - name: Run database migrations
         run: |
           python -c "
-          from core.db_engine import get_engine
-          from core.models import Base
+          from src.core.db.db_engine import get_engine
+          from src.core.db.models import Base
           Base.metadata.create_all(get_engine())
           print('DB schema created')
           "

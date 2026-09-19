@@ -1,10 +1,11 @@
-from pydantic import BaseModel
-from typing import Optional
 import re
+
+from pydantic import BaseModel
+
 
 class ChatRequest(BaseModel):
     message: str
-    session_id: Optional[str] = None
+    session_id: str | None = None
 
     model_config = {"strict": True}
 
@@ -17,12 +18,13 @@ class ChatRequest(BaseModel):
             if not re.match(r"^[a-zA-Z0-9_\-]+$", self.session_id):
                 raise ValueError("session_id hanya boleh huruf/angka/underscore/hyphen")
 
+
 class FeedbackRequest(BaseModel):
     session_id: str
     agent_type: str
     rating: int
-    comment: Optional[str] = ""
-    corrected_agent: Optional[str] = None
+    comment: str | None = ""
+    corrected_agent: str | None = None
 
     model_config = {"strict": True}
 
@@ -40,9 +42,10 @@ class FeedbackRequest(BaseModel):
         if self.corrected_agent and len(self.corrected_agent) > 50:
             raise ValueError("corrected_agent terlalu panjang")
 
+
 class TaskRequest(BaseModel):
     message: str
-    session_id: Optional[str] = None
+    session_id: str | None = None
 
     model_config = {"strict": True}
 
@@ -55,9 +58,12 @@ class TaskRequest(BaseModel):
             if not re.match(r"^[a-zA-Z0-9_\-]+$", self.session_id):
                 raise ValueError("session_id hanya boleh huruf/angka/underscore/hyphen")
 
+
 class UserRequest(BaseModel):
     name: str
-    role: Optional[str] = "user"
+    role: str | None = "user"
+    jobs: bool | None = False
+    description: str | None = ""
 
     model_config = {"strict": True}
 
@@ -68,12 +74,15 @@ class UserRequest(BaseModel):
             raise ValueError("name tidak boleh kosong")
         if self.role not in (None, "user", "admin", "owner"):
             raise ValueError("role harus: user, admin, atau owner")
+        if self.description and len(self.description) > 500:
+            raise ValueError("description terlalu panjang (maks 500 karakter termasuk spasi)")
+
 
 class JobRequest(BaseModel):
     name: str
     prompt: str
-    interval_detik: Optional[int] = None
-    daily_at: Optional[str] = None  # "HH:MM" WIB
+    interval_detik: int | None = None
+    daily_at: str | None = None  # "HH:MM" WIB
 
     model_config = {"strict": True}
 

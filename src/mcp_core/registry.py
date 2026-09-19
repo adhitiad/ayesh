@@ -1,20 +1,20 @@
 """MCP Registry: Memilih plugins berdasarkan rules agent."""
 
+import asyncio
 import os
 import platform
 import time
-import asyncio
-from typing import List, Any, Optional
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
 
 from src.config.rules import AGENT_RULES
-from src.plugins.core_tools import AVAILABLE_PLUGINS
 from src.mcp_core.client import mcp_manager
 from src.mcp_core.skills import get_skills_block
-from pathlib import Path
+from src.plugins.core_tools import AVAILABLE_PLUGINS
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-RULES_DIR = _PROJECT_ROOT / "ayesh" / "rules"
+RULES_DIR = _PROJECT_ROOT / ".ayesh" / "rules"
 
 WIB = timezone(timedelta(hours=7))
 
@@ -87,7 +87,7 @@ _UNTRUSTED_TOOL_OUTPUT = (
 def _build_system_block() -> str:
     """Blok `## System` (spesifikasi mesin, murah token, cache 5 menit). Tak pernah raise."""
     try:
-        from src.core.sysinfo import get_sysinfo_block
+        from src.core.system.sysinfo import get_sysinfo_block
 
         return get_sysinfo_block()
     except Exception as _e:
@@ -100,10 +100,7 @@ def _build_system_block() -> str:
 def _get_remote_tools() -> list:
     """Cache remote MCP tools selama 5 menit agar tidak blok tiap request."""
     now = time.time()
-    if (
-        _REMOTE_CACHE["tools"] is not None
-        and (now - _REMOTE_CACHE["ts"]) < _REMOTE_CACHE_TTL
-    ):
+    if _REMOTE_CACHE["tools"] is not None and (now - _REMOTE_CACHE["ts"]) < _REMOTE_CACHE_TTL:
         return _REMOTE_CACHE["tools"]
     try:
         tools = asyncio.run(mcp_manager.list_all_tools())
@@ -131,7 +128,7 @@ def _build_environment() -> str:
 
 
 def _build_sop_block() -> str:
-    """Blok SOP dari ayesh/rules/*.md sebagai teks langsung (tanpa FAISS — murah token)."""
+    """Blok SOP dari .ayesh/rules/*.md sebagai teks langsung (tanpa FAISS — murah token)."""
     if not RULES_DIR.exists():
         return ""
     chunks = []
@@ -169,10 +166,10 @@ def _build_tools_section(skills: list, tool_policy: dict) -> str:
 
 def load_mcp_context(
     agent_type: str,
-    session_nama: Optional[str] = None,
-    session_context: Optional[str] = None,
-    variant: Optional[str] = None,
-) -> tuple[str, List[Any]]:
+    session_nama: str | None = None,
+    session_context: str | None = None,
+    variant: str | None = None,
+) -> tuple[str, list[Any]]:
     """
     Membaca AGENT_RULES dari config/rules.py berdasarkan agent_type.
     Hanya menggunakan tools lokal (plugins) — remote MCP tools di-skip untuk performa.
@@ -189,15 +186,11 @@ def load_mcp_context(
         tuple: (system_prompt, list_of_tools)
     """
     if agent_type not in AGENT_RULES:
-        raise ValueError(
-            f"Agent type '{agent_type}' tidak dikenal. Pilihan: {list(AGENT_RULES.keys())}"
-        )
+        raise ValueError(f"Agent type '{agent_type}' tidak dikenal. Pilihan: {list(AGENT_RULES.keys())}")
     if variant is None:
         variant = os.getenv("PROMPT_VARIANT", "full").strip().lower() or "full"
     if variant not in ("full", "no-sop", "minimal"):
-        raise ValueError(
-            f"Variant '{variant}' tidak dikenal. Pilihan: full, no-sop, minimal."
-        )
+        raise ValueError(f"Variant '{variant}' tidak dikenal. Pilihan: full, no-sop, minimal.")
 
     agent_config = AGENT_RULES[agent_type]
     skills = agent_config.get("skills", [])
@@ -233,9 +226,7 @@ def load_mcp_context(
             session_block += f"\n- Nama session: {session_nama}"
         if session_context:
             session_block += f"\n- Konteks session: {session_context}"
-        session_block += (
-            "\n- Riwayat percakapan session dimuat dari memori; baca sebelum menjawab."
-        )
+        session_block += "\n- Riwayat percakapan session dimuat dari memori; baca sebelum menjawab."
         sections.append(session_block)
     sections.append(_build_tools_section(skills, tool_policy))
     if variant in ("full", "no-sop"):

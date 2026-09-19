@@ -6,24 +6,26 @@ agar import dari luar (api_server, telegram, scheduler, tests) tetap kompatibel.
 """
 
 # ── Redis RESP2 patch — WAJIB sebelum import modul lain ──────────────
-from src.core.redis_patch import apply_redis_patch
+from src.core.system.redis_patch import apply_redis_patch
 
 apply_redis_patch()
 
 # ── Environment ──────────────────────────────────────────────────────
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 
 # ── Re-export publik (digunakan oleh api_server, telegram, scheduler, dll.) ──
-from src.core.router import route_request_inner  # noqa: F401
-from src.core.tools import get_quarantined_tools  # noqa: F401
-from src.core.learning import learn_from_feedback  # noqa: F401
-from src.core.skills import extract_skill_invocation  # noqa: F401
-from src.core.skills import split_fanout_segments  # noqa: F401
+from src.core.memory.learning import learn_from_feedback  # noqa: F401, E402
 
 # ── Wrapper route_request dengan decorator metrik ────────────────────
-from src.core.usage import record_usage as _record_usage
+from src.core.observability.usage import record_usage as _record_usage  # noqa: E402
+from src.core.routing.router import route_request_inner  # noqa: E402
+from src.core.routing.skills import (  # noqa: E402
+    extract_skill_invocation,
+    split_fanout_segments,
+)
+from src.core.routing.tools import get_quarantined_tools  # noqa: F401, E402
 
 
 @_record_usage

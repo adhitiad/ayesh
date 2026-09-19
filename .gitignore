@@ -17,6 +17,7 @@ env/
 
 # ===== Environment Variables / Secrets =====
 .env
+.env.*.local
 
 # ===== Logs & OS =====
 *.log
@@ -64,5 +65,8 @@ output/*
 codeql-custom-queries-python/
 .codacy/
 
-#Ignore vscode AI rules
-.github\instructions\codacy.instructions.md
+# Ignore vscode AI rules
+.github/instructions/codacy.instructions.md
+
+# ===== Node (MCP servers) =====
+node_modules/

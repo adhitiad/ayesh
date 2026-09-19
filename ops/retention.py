@@ -10,7 +10,7 @@ import argparse
 
 
 def purge(days_logs: int = 30, days_stats: int = 90, days_tasks: int = 30) -> dict:
-    from src.core.db import connect
+    from src.core.db.db import connect
     conn = connect()
     cur = conn.cursor()
     out = {}

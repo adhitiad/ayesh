@@ -11,8 +11,9 @@ Butuh: PostgreSQL & Redis jalan, server API di port 8080.
 import subprocess
 import sys
 import time
+from typing import Any
+
 import requests
-from typing import List, Dict, Any
 
 API_BASE = "http://localhost:8080"
 SESSION_ID = "chaos_test_001"
@@ -29,6 +30,7 @@ def check_service(name: str, check_fn) -> bool:
 
 def pg_check() -> bool:
     import psycopg2
+
     from src.config.routing_keywords_pg import DATABASE_URL
     conn = psycopg2.connect(DATABASE_URL, connect_timeout=3)
     conn.close()
@@ -46,7 +48,7 @@ def api_health() -> bool:
     return r.status_code == 200 and r.json().get("postgres", {}).get("status") == "up"
 
 
-def send_chat(message: str, session_id: str = SESSION_ID) -> Dict[str, Any]:
+def send_chat(message: str, session_id: str = SESSION_ID) -> dict[str, Any]:
     """Kirim pesan ke API, return response JSON atau error."""
     try:
         r = requests.post(
@@ -59,7 +61,7 @@ def send_chat(message: str, session_id: str = SESSION_ID) -> Dict[str, Any]:
         return {"status": "error", "error": str(e)}
 
 
-def run_chaos_scenario(name: str, kill_fn, restore_fn, test_messages: List[str]) -> Dict[str, Any]:
+def run_chaos_scenario(name: str, kill_fn, restore_fn, test_messages: list[str]) -> dict[str, Any]:
     """Jalankan satu skenario chaos."""
     print(f"\n=== {name} ===")
     results = []
@@ -72,7 +74,7 @@ def run_chaos_scenario(name: str, kill_fn, restore_fn, test_messages: List[str])
         time.sleep(1)
 
     # Kill service
-    print(f"  Killing service...")
+    print("  Killing service...")
     kill_fn()
     time.sleep(2)
 
@@ -84,7 +86,7 @@ def run_chaos_scenario(name: str, kill_fn, restore_fn, test_messages: List[str])
         time.sleep(1)
 
     # Restore service
-    print(f"  Restoring service...")
+    print("  Restoring service...")
     restore_fn()
     time.sleep(3)
 

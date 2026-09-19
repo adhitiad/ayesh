@@ -4,9 +4,9 @@ Middleware untuk FastAPI + helper functions untuk deteksi & blokir
 prompt injection, data exfiltration, dan roleplay bypass.
 """
 
-import re
 import html
-from typing import List, Tuple
+import re
+
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -69,7 +69,7 @@ INJECTION_PATTERNS = [
 _COMPILED_PATTERNS = [(re.compile(p), p) for p in INJECTION_PATTERNS]
 
 
-def detect_injection(text: str) -> List[Tuple[str, str]]:
+def detect_injection(text: str) -> list[tuple[str, str]]:
     """Deteksi pola injeksi dalam teks. Return list of (matched_pattern, matched_text)."""
     matches = []
     for pattern, raw in _COMPILED_PATTERNS:
@@ -91,7 +91,7 @@ def sanitize_input(text: str, max_len: int = 10000) -> str:
     return text
 
 
-def guard_prompt(text: str) -> Tuple[bool, str]:
+def guard_prompt(text: str) -> tuple[bool, str]:
     """Guard prompt: return (safe, reason). Jika unsafe, safe=False dengan alasan."""
     if not text:
         return True, ""
@@ -112,7 +112,7 @@ def guard_prompt(text: str) -> Tuple[bool, str]:
 class PromptInjectionGuardMiddleware(BaseHTTPMiddleware):
     """Middleware FastAPI untuk guard prompt injection di endpoint /chat."""
 
-    def __init__(self, app, protected_paths: List[str] = None):
+    def __init__(self, app, protected_paths: list[str] | None = None):
         super().__init__(app)
         self.protected_paths = protected_paths or [
             "/chat",
@@ -171,7 +171,7 @@ class PromptInjectionGuardMiddleware(BaseHTTPMiddleware):
 
 
 # Helper untuk dipakai manual di route_request atau tools
-def validate_user_input(message: str) -> Tuple[bool, str]:
+def validate_user_input(message: str) -> tuple[bool, str]:
     """Validasi input user: return (valid, sanitized_message)."""
     safe, reason = guard_prompt(message)
     if not safe:

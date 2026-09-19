@@ -30,7 +30,7 @@ TABLES = [
 
 
 def _conn():
-    from src.core.db import connect
+    from src.core.db.db import connect
 
     return connect()
 
@@ -48,7 +48,7 @@ def dump_all() -> dict:
                 rows.append(
                     {
                         c: (v.isoformat() if hasattr(v, "isoformat") else v)
-                        for c, v in zip(cols, r)
+                        for c, v in zip(cols, r, strict=False)
                     }
                 )
             out["tables"][table] = {"columns": cols, "rows": rows}

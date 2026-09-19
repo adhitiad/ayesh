@@ -2,14 +2,14 @@
 
 import json
 
-from src.core.logger import setup_logger
+from src.core.observability.logger import setup_logger
 
 logger = setup_logger("orchestrator.cli")
 
 
 def run_demo():
     """Run interactive demo scenarios."""
-    from src.core.router import route_request_inner
+    from src.core.routing.router import route_request_inner
 
     logger.info("=== Multi-Agent System | Fase 10: Smart Routing & Shortcut ===")
     logger.info("")

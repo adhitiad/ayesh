@@ -1,9 +1,10 @@
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+
+from src.core.system.rate_limit import _scope_for_path, check_rate_limit
 from src.plugins.input_guard import PromptInjectionGuardMiddleware
-from src.core.rate_limit import check_rate_limit, _scope_for_path
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

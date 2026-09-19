@@ -5,7 +5,7 @@ Each test maps to a specific security requirement.
 """
 
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 class TestAuthRequired(unittest.TestCase):
@@ -13,8 +13,9 @@ class TestAuthRequired(unittest.TestCase):
 
     def test_chat_requires_auth(self):
         """POST /chat must reject unauthenticated requests."""
-        from api_server import app
         from fastapi.testclient import TestClient
+
+        from api_server import app
 
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/chat", json={"message": "test"})
@@ -22,8 +23,9 @@ class TestAuthRequired(unittest.TestCase):
 
     def test_sessions_requires_auth(self):
         """GET /sessions must reject unauthenticated requests."""
-        from api_server import app
         from fastapi.testclient import TestClient
+
+        from api_server import app
 
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/sessions")
@@ -31,8 +33,9 @@ class TestAuthRequired(unittest.TestCase):
 
     def test_tasks_requires_auth(self):
         """GET /tasks must reject unauthenticated requests."""
-        from api_server import app
         from fastapi.testclient import TestClient
+
+        from api_server import app
 
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/tasks")
@@ -40,8 +43,9 @@ class TestAuthRequired(unittest.TestCase):
 
     def test_jobs_requires_auth(self):
         """GET /jobs must reject unauthenticated requests."""
-        from api_server import app
         from fastapi.testclient import TestClient
+
+        from api_server import app
 
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/jobs")
@@ -49,8 +53,9 @@ class TestAuthRequired(unittest.TestCase):
 
     def test_approvals_requires_auth(self):
         """GET /approvals/pending must reject unauthenticated requests."""
-        from api_server import app
         from fastapi.testclient import TestClient
+
+        from api_server import app
 
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/approvals/pending")
@@ -58,8 +63,9 @@ class TestAuthRequired(unittest.TestCase):
 
     def test_users_requires_auth(self):
         """GET /users must reject unauthenticated requests."""
-        from api_server import app
         from fastapi.testclient import TestClient
+
+        from api_server import app
 
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/users")
@@ -71,8 +77,9 @@ class TestIDORSession(unittest.TestCase):
 
     def test_session_access_requires_owner(self):
         """GET /sessions/{id} must verify ownership (404 if not found is also acceptable)."""
-        from api_server import app
         from fastapi.testclient import TestClient
+
+        from api_server import app
 
         client = TestClient(app, raise_server_exceptions=False)
         # Without auth, must be rejected or 404 (not leaked data)
@@ -85,8 +92,9 @@ class TestIDORMemory(unittest.TestCase):
 
     def test_memory_requires_owner(self):
         """GET /memory/{session_id} must verify ownership (404 if not found is also acceptable)."""
-        from api_server import app
         from fastapi.testclient import TestClient
+
+        from api_server import app
 
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/memory/nonexistent")
@@ -94,8 +102,9 @@ class TestIDORMemory(unittest.TestCase):
 
     def test_memory_delete_requires_owner(self):
         """DELETE /memory/{session_id} must verify ownership (404 if not found is also acceptable)."""
-        from api_server import app
         from fastapi.testclient import TestClient
+
+        from api_server import app
 
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.delete("/memory/nonexistent")
@@ -107,8 +116,9 @@ class TestIDORTask(unittest.TestCase):
 
     def test_task_requires_owner(self):
         """GET /tasks/{id} must verify ownership."""
-        from api_server import app
         from fastapi.testclient import TestClient
+
+        from api_server import app
 
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/tasks/nonexistent")
@@ -120,8 +130,9 @@ class TestJobPrivilegeEscalation(unittest.TestCase):
 
     def test_post_users_requires_owner(self):
         """POST /users must require owner role (not just admin)."""
-        from src.core.auth import require_owner_only
         import inspect
+
+        from src.core.auth.auth import require_owner_only
 
         source = inspect.getsource(require_owner_only)
         # Must check role == "owner" (the actual condition, not docstring)
@@ -129,8 +140,9 @@ class TestJobPrivilegeEscalation(unittest.TestCase):
 
     def test_job_default_approval_deny(self):
         """New jobs must default to deny_all approval policy."""
-        from src.core.scheduler import create_job
         import inspect
+
+        from src.core.scheduler.scheduler import create_job
 
         source = inspect.getsource(create_job)
         self.assertIn("deny_all", source)
@@ -141,8 +153,9 @@ class TestSchedulerNoRCE(unittest.TestCase):
 
     def test_scheduled_job_uses_route_request(self):
         """Scheduled jobs must use route_request, not exec/eval."""
-        from src.core.scheduler import run_due_jobs
         import inspect
+
+        from src.core.scheduler.scheduler import run_due_jobs
 
         source = inspect.getsource(run_due_jobs)
         self.assertNotIn("exec(", source)
@@ -156,22 +169,22 @@ class TestPythonExecutionRestricted(unittest.TestCase):
 
     def test_jalankan_python_uses_sandbox(self):
         """jalankan_python must use CodeExecutionSandbox."""
-        from src.plugins.core_tools import jalankan_python
 
         # jalankan_python is a StructuredTool; check the wrapped function
-        fn = jalankan_python.invoke  # or the underlying function
         # Check the source file for CodeExecutionSandbox usage
         import src.plugins.core_tools as mod
 
-        src = open(mod.__file__).read()
+        with open(mod.__file__, encoding="utf-8") as f:
+            src = f.read()
         self.assertIn("CodeExecutionSandbox", src)
         # jalankan_python function body uses it
         self.assertIn("sandbox = CodeExecutionSandbox()", src)
 
     def test_sandbox_restricted_env_no_secrets(self):
         """Sandbox env must not leak secrets or full os.environ."""
-        from src.plugins.core_tools import CodeExecutionSandbox
         import os
+
+        from src.plugins.core_tools import CodeExecutionSandbox
 
         sandbox = CodeExecutionSandbox()
         # Must have fewer vars than os.environ
@@ -188,13 +201,14 @@ class TestPythonExecutionRestricted(unittest.TestCase):
 
     def test_sandbox_prevents_subprocess_env_leak(self):
         """Subprocess in sandbox cannot see parent secrets."""
-        from src.plugins.core_tools import CodeExecutionSandbox
         import os
+
+        from src.plugins.core_tools import CodeExecutionSandbox
 
         os.environ["SANDBOX_TEST_SECRET"] = "leaked_value_12345"
         sandbox = CodeExecutionSandbox()
         # Run code that reads env vars
-        exit_code, output = sandbox.run(
+        _exit_code, output = sandbox.run(
             [
                 "python",
                 "-c",
@@ -273,7 +287,7 @@ class TestMCPAllowlist(unittest.TestCase):
 
     def test_mcp_policy_exists(self):
         """MCP_POLICY must be defined."""
-        from src.core.approval import MCP_POLICY
+        from src.core.auth.approval import MCP_POLICY
 
         self.assertIsInstance(MCP_POLICY, dict)
         self.assertIn("coder_agent", MCP_POLICY)
@@ -282,22 +296,22 @@ class TestMCPAllowlist(unittest.TestCase):
 
     def test_casual_agent_no_mcp(self):
         """casual_agent must have empty MCP policy."""
-        from src.core.approval import MCP_POLICY
+        from src.core.auth.approval import MCP_POLICY
 
         self.assertEqual(MCP_POLICY["casual_agent"], {})
 
     def test_check_mcp_policy_unknown_server_denies(self):
         """Unknown MCP server must be denied."""
-        from src.core.approval import check_mcp_policy
+        from src.core.auth.approval import check_mcp_policy
 
-        ok, msg = check_mcp_policy("unknown_server", "unknown_tool")
+        ok, _msg = check_mcp_policy("unknown_server", "unknown_tool")
         self.assertFalse(ok)
 
     def test_check_mcp_policy_unknown_tool_denies(self):
         """Unknown tool on known server must be denied."""
-        from src.core.approval import check_mcp_policy
+        from src.core.auth.approval import check_mcp_policy
 
-        ok, msg = check_mcp_policy("tavily", "malicious_tool")
+        ok, _msg = check_mcp_policy("tavily", "malicious_tool")
         self.assertFalse(ok)
 
 
@@ -308,21 +322,21 @@ class TestApprovalFailClosed(unittest.TestCase):
         """panggil_mcp must return error if approval gate fails."""
         from src.plugins.core_tools import panggil_mcp
 
-        with patch("src.core.approval.check_mcp_policy", return_value=(True, "")):
-            with patch(
-                "src.core.approval.ensure_approved", side_effect=Exception("DB down")
-            ):
-                result = panggil_mcp.invoke(
-                    {
-                        "server": "tavily",
-                        "tool": "tavily_search",
-                        "args_json": '{"query": "test"}',
-                    }
-                )
-                self.assertTrue(
-                    "denied" in result.lower() or "error" in result.lower(),
-                    f"Expected denial, got: {result[:100]}",
-                )
+        with (
+            patch("src.core.auth.approval.check_mcp_policy", return_value=(True, "")),
+            patch("src.core.auth.approval.ensure_approved", side_effect=Exception("DB down")),
+        ):
+            result = panggil_mcp.invoke(
+                {
+                    "server": "tavily",
+                    "tool": "tavily_search",
+                    "args_json": '{"query": "test"}',
+                }
+            )
+            self.assertTrue(
+                "denied" in result.lower() or "error" in result.lower(),
+                f"Expected denial, got: {result[:100]}",
+            )
 
 
 class TestToolCapabilityBoundary(unittest.TestCase):
@@ -364,28 +378,27 @@ class TestTelegramAllowlist(unittest.TestCase):
 
     def test_empty_allowlist_denies(self):
         """Empty TELEGRAM_ALLOWED_IDS must deny all."""
-        from src.integrations.telegram import is_allowed
         import os
 
-        with patch.dict(
-            os.environ, {"TELEGRAM_ALLOWED_IDS": "", "TELEGRAM_DEV": "0"}, clear=True
-        ):
+        from src.integrations.telegram import is_allowed
+
+        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_IDS": "", "TELEGRAM_DEV": "0"}, clear=True):
             self.assertFalse(is_allowed(12345))
 
     def test_dev_mode_allows_all(self):
         """TELEGRAM_DEV=1 allows all."""
-        from src.integrations.telegram import is_allowed
         import os
 
-        with patch.dict(
-            os.environ, {"TELEGRAM_ALLOWED_IDS": "", "TELEGRAM_DEV": "1"}, clear=True
-        ):
+        from src.integrations.telegram import is_allowed
+
+        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_IDS": "", "TELEGRAM_DEV": "1"}, clear=True):
             self.assertTrue(is_allowed(12345))
 
     def test_populated_allowlist_restricts(self):
         """Non-empty allowlist only allows listed IDs."""
-        from src.integrations.telegram import is_allowed
         import os
+
+        from src.integrations.telegram import is_allowed
 
         with patch.dict(os.environ, {"TELEGRAM_ALLOWED_IDS": "111,222"}, clear=True):
             self.assertTrue(is_allowed(111))
@@ -397,7 +410,7 @@ class TestRateLimit(unittest.TestCase):
 
     def test_rate_limit_enforced_on_chat(self):
         """Rate limit must be enforced on /chat."""
-        from src.core.rate_limit import check_rate_limit
+        from src.core.system.rate_limit import check_rate_limit
 
         # Should return a tuple (allowed, info)
         allowed, info = check_rate_limit("chat", "security_test_ip")
@@ -407,7 +420,7 @@ class TestRateLimit(unittest.TestCase):
 
     def test_rate_limits_are_capped(self):
         """Rate limits must have reasonable maximums."""
-        from src.core.rate_limit import RATE_LIMITS
+        from src.core.system.rate_limit import RATE_LIMITS
 
         for scope, (burst, sustained) in RATE_LIMITS.items():
             self.assertLessEqual(burst, 30, f"{scope} burst exceeds 30/s")
@@ -451,7 +464,7 @@ class TestSecretRedaction(unittest.TestCase):
 
     def test_redact_openai_key(self):
         """OpenAI sk- keys must be redacted."""
-        from src.core.logger import redact_secrets
+        from src.core.observability.logger import redact_secrets
 
         result = redact_secrets("Using key sk-proj-abc123def456ghi789jklmno")
         self.assertNotIn("sk-proj-abc123", result)
@@ -459,7 +472,7 @@ class TestSecretRedaction(unittest.TestCase):
 
     def test_redact_aws_key(self):
         """AWS access keys must be redacted."""
-        from src.core.logger import redact_secrets
+        from src.core.observability.logger import redact_secrets
 
         result = redact_secrets("Key: AKIAIOSFODNN7EXAMPLE")
         self.assertNotIn("AKIAIOSFODNN7", result)
@@ -467,7 +480,7 @@ class TestSecretRedaction(unittest.TestCase):
 
     def test_redact_github_token(self):
         """GitHub tokens must be redacted."""
-        from src.core.logger import redact_secrets
+        from src.core.observability.logger import redact_secrets
 
         result = redact_secrets("Token: ghp_abcdef1234567890")
         self.assertNotIn("ghp_abcdef", result)
@@ -475,7 +488,7 @@ class TestSecretRedaction(unittest.TestCase):
 
     def test_redact_bearer_token(self):
         """Bearer tokens must be redacted."""
-        from src.core.logger import redact_secrets
+        from src.core.observability.logger import redact_secrets
 
         result = redact_secrets("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.test")
         self.assertNotIn("eyJhbGci", result)
@@ -483,7 +496,7 @@ class TestSecretRedaction(unittest.TestCase):
 
     def test_redact_database_url(self):
         """Database URLs with passwords must be redacted."""
-        from src.core.logger import redact_secrets
+        from src.core.observability.logger import redact_secrets
 
         result = redact_secrets("postgres://user:secretpass@localhost/db")
         self.assertNotIn("secretpass", result)
@@ -491,7 +504,7 @@ class TestSecretRedaction(unittest.TestCase):
 
     def test_redact_redis_url(self):
         """Redis URLs with passwords must be redacted."""
-        from src.core.logger import redact_secrets
+        from src.core.observability.logger import redact_secrets
 
         result = redact_secrets("redis://:redispass@localhost:6379")
         self.assertNotIn("redispass", result)
@@ -499,7 +512,7 @@ class TestSecretRedaction(unittest.TestCase):
 
     def test_redact_api_key_header(self):
         """X-API-Key headers must be redacted."""
-        from src.core.logger import redact_secrets
+        from src.core.observability.logger import redact_secrets
 
         result = redact_secrets("X-API-Key: fr_abcdef1234567890")
         self.assertNotIn("fr_abcdef", result)
@@ -507,7 +520,7 @@ class TestSecretRedaction(unittest.TestCase):
 
     def test_redact_password_assignment(self):
         """Password assignments must be redacted."""
-        from src.core.logger import redact_secrets
+        from src.core.observability.logger import redact_secrets
 
         result = redact_secrets("password=mypassword123")
         self.assertNotIn("mypassword123", result)
@@ -515,17 +528,15 @@ class TestSecretRedaction(unittest.TestCase):
 
     def test_safe_error_no_paths(self):
         """Error responses must not contain filesystem paths."""
-        from src.core.error_handling import safe_error_response
+        from src.core.system.error_handling import safe_error_response
 
-        resp = safe_error_response(
-            Exception("Error at /home/user/.env"), request_id="test123"
-        )
+        resp = safe_error_response(Exception("Error at /home/user/.env"), request_id="test123")
         self.assertNotIn("/home/", str(resp))
         self.assertIn("request_id", resp)
 
     def test_safe_error_no_sql(self):
         """Error responses must not contain SQL."""
-        from src.core.error_handling import safe_error_response
+        from src.core.system.error_handling import safe_error_response
 
         resp = safe_error_response(
             Exception("SQL: SELECT * FROM users WHERE password = 'x'"),

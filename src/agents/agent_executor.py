@@ -1,21 +1,49 @@
 """Agent Executor: Mengelola tool calling loop secara otomatis menggunakan LangGraph."""
 
-from typing import Annotated, Sequence, AsyncIterator
-from typing_extensions import TypedDict
 import time
+from collections.abc import AsyncIterator, Sequence
+from typing import Annotated
 
-from src.core.redis_patch import apply_redis_patch
+from typing_extensions import TypedDict
+
+from src.core.system.redis_patch import apply_redis_patch
 
 apply_redis_patch()
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage  # noqa: E402
+from langgraph.graph import END, StateGraph  # noqa: E402
+from langgraph.graph.message import add_messages  # noqa: E402
 
-from src.agents.llm_config import get_llm
-from src.memory.memory import get_memory_for_session
-from src.core.logger import setup_logger
+try:
+    from langgraph.prebuilt import ToolNode
+except ImportError:
+    from langchain_core.tools import BaseTool
+
+    class ToolNode:
+        """Fallback ToolNode untuk langgraph >= 1.2 tanpa ToolNode bawaan."""
+
+        def __init__(self, tools: list[BaseTool]) -> None:
+            self.tools_by_name = {t.name: t for t in tools}
+
+        def invoke(self, state: dict) -> dict:
+            last = state["messages"][-1]
+            results = []
+            for tc in getattr(last, "tool_calls", []):
+                tool = self.tools_by_name.get(tc["name"])
+                if tool:
+                    out = tool.invoke(tc["args"])
+                    results.append({"role": "tool", "content": str(out), "tool_call_id": tc["id"]})
+                else:
+                    results.append({"role": "tool", "content": f"Unknown tool: {tc['name']}", "tool_call_id": tc["id"]})
+            return {"messages": results}
+
+        async def ainvoke(self, state: dict) -> dict:
+            return self.invoke(state)
+
+
+from src.agents.llm_config import get_llm  # noqa: E402
+from src.core.observability.logger import setup_logger  # noqa: E402
+from src.memory.memory import get_memory_for_session  # noqa: E402
 
 logger = setup_logger("agent_executor")
 
@@ -43,10 +71,7 @@ def create_agent_executor(system_prompt: str, tools: list):
 
     llm = get_llm()
 
-    if tools:
-        llm_with_tools = llm.bind_tools(tools)
-    else:
-        llm_with_tools = llm
+    llm_with_tools = llm.bind_tools(tools) if tools else llm
 
     def agent_node(state: AgentState):
         """Node utama agent yang memanggil LLM dengan retry logic."""
@@ -83,9 +108,7 @@ def create_agent_executor(system_prompt: str, tools: list):
                         time.sleep(wait_time)
                         continue
                     else:
-                        logger.error(
-                            f"API tetap gagal setelah {MAX_RETRIES} percobaan."
-                        )
+                        logger.error(f"API tetap gagal setelah {MAX_RETRIES} percobaan.")
                         return {
                             "messages": [
                                 AIMessage(
@@ -96,7 +119,7 @@ def create_agent_executor(system_prompt: str, tools: list):
                 else:
                     raise e
 
-        return {"messages": [AIMessage(content=f"Error: {str(last_error)}")]}
+        return {"messages": [AIMessage(content=f"Error: {last_error!s}")]}
 
     tool_node = ToolNode(tools) if tools else None
 
@@ -116,9 +139,7 @@ def create_agent_executor(system_prompt: str, tools: list):
     graph.set_entry_point("agent")
 
     if tool_node:
-        graph.add_conditional_edges(
-            "agent", should_continue, {"tools": "tools", END: END}
-        )
+        graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
         graph.add_edge("tools", "agent")
     else:
         graph.add_edge("agent", END)
@@ -171,20 +192,16 @@ async def run_agent_executor_stream(
     result = await executor.ainvoke({"messages": messages})
     final_message = result["messages"][-1]
     try:
-        from src.core.usage import note_usage
+        from src.core.observability.usage import note_usage
 
         note_usage(final_message)
     except Exception as _e:
         import logging
 
         logging.getLogger(__name__).debug("note_usage (tool loop) error: %s", _e)
-    from src.core.text import extract_text
+    from src.core.llm.text import extract_text
 
-    raw = (
-        final_message.content
-        if hasattr(final_message, "content")
-        else str(final_message)
-    )
+    raw = final_message.content if hasattr(final_message, "content") else str(final_message)
     ai_response = extract_text(raw)
 
     memory.add_user_message(user_input)
@@ -215,20 +232,16 @@ def run_agent_executor(
 
     final_message = result["messages"][-1]
     try:
-        from src.core.usage import note_usage
+        from src.core.observability.usage import note_usage
 
         note_usage(final_message)
     except Exception as _e:
         import logging
 
         logging.getLogger(__name__).debug("note_usage (tool loop) error: %s", _e)
-    from src.core.text import extract_text
+    from src.core.llm.text import extract_text
 
-    ai_response = extract_text(
-        final_message.content
-        if hasattr(final_message, "content")
-        else str(final_message)
-    )
+    ai_response = extract_text(final_message.content if hasattr(final_message, "content") else str(final_message))
 
     memory.add_user_message(user_input)
     memory.add_ai_message(ai_response)

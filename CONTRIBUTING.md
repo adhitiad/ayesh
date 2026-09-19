@@ -11,7 +11,7 @@ Terima kasih sudah mau berkontribusi! Proyek ini adalah orkestrator multi-agent 
 ## Yang bisa dikerjakan
 
 - Perbaiki bug, tambah tes, perbaiki dokumentasi.
-- Tambah skill (`ayesh/skills/*.md`), aturan (`ayesh/rules/*.md`), atau dokumen RAG (`data/*.txt`, lalu re-ingest).
+- Tambah skill (`.ayesh/skills/*.md`), aturan (`.ayesh/rules/*.md`), atau dokumen RAG (`data/*.txt`, lalu re-ingest).
 - Usulkan fitur lewat Issue `feature request` atau diskusi ide.
 
 ## Aturan kode
@@ -20,7 +20,7 @@ Terima kasih sudah mau berkontribusi! Proyek ini adalah orkestrator multi-agent 
 - **Jangan commit secrets**: `.env`, `*.pem`, `*.key`, `*.db` sudah di-`.gitignore`. Cek `git status` sebelum commit.
 - **Jangan commit artefak**: `setup-fr.exe`, `dist/`, `build/`, `faiss_index/`, `tests/last_eval.json`, `tests/ab_results.json`, `strix_runs/`.
 - Jaga **keyword hygiene** routing: jangan tambah kata generik (`sekarang`, `waktu`, `jam`) sebagai keyword agent — terbukti membajak follow-up ke agent yang salah (lihat `AGENTS.md`).
-- Prompt (`config/rules.py`, `mcp_core/registry.py`, `mcp_core/skills.py`, `ayesh/`) harus tetap memuat blok `## Identitas` Ayesh.
+- Prompt (`config/rules.py`, `mcp_core/registry.py`, `mcp_core/skills.py`, `.ayesh/`) harus tetap memuat blok `## Identitas` Ayesh.
 - Perubahan skema DB wajib lewat **Alembic** (`alembic revision --autogenerate`), bukan `create_all` manual — kecuali bootstrap awal via `setup.py`.
 - Satu PR = satu topik. Jangan campur refactor besar dengan fitur.
 

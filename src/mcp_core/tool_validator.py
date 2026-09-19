@@ -6,7 +6,6 @@ never expand. AGENT_RULES['skills'] is documentation/trigger info, NOT
 a security capability grant.
 """
 
-from src.config.rules import AGENT_RULES
 
 # === SINGLE AUTHORITY: Security capability per agent ===
 # This is the ONLY place that defines which tools each agent may execute.

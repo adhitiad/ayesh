@@ -1,15 +1,14 @@
 """Plugin Tools (Tangan & Kaki AI) untuk eksekusi aksi nyata di sistem lokal."""
 
-import os
 import asyncio
+import os
+from typing import ClassVar
+
 from langchain_core.tools import tool
 
 from src.plugins.time_tool import get_current_time
 
-
-_PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-)
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
 
 _SENSITIVE_NAMES = {".env", ".env.local", ".env.production", ".env.staging"}
@@ -55,7 +54,7 @@ def _safe_path(path: str) -> tuple:
     allowed = False
     if not in_root:
         try:
-            from src.core.workspaces import is_path_allowed
+            from src.core.system.workspaces import is_path_allowed
 
             allowed = bool(is_path_allowed(ap))
         except Exception as _e:
@@ -66,9 +65,11 @@ def _safe_path(path: str) -> tuple:
         if not allowed:
             return (
                 False,
-                f"Error: path di luar project root ({_PROJECT_ROOT}) dan bukan direktori "
-                "pilihan user. Tanya dulu mau disimpan di mana, lalu catat via tool "
-                "set_target_dir sebelum menulis.",
+                (
+                    f"Error: path di luar project root ({_PROJECT_ROOT}) dan bukan direktori "
+                    "pilihan user. Tanya dulu mau disimpan di mana, lalu catat via tool "
+                    "set_target_dir sebelum menulis."
+                ),
             )
 
     # Check for symlink escape: if original path != resolved path and resolved is outside
@@ -124,8 +125,8 @@ def tulis_kode(filepath: str, konten: str, overwrite: bool = False) -> str:
         if not _path_ok:
             return filepath
         try:
-            from src.core.approval import ensure_approved
-            from src.core.auth import get_current_user_id
+            from src.core.auth.approval import ensure_approved
+            from src.core.auth.auth import get_current_user_id
 
             _ok, _msg = ensure_approved(
                 "tulis_kode",
@@ -135,7 +136,7 @@ def tulis_kode(filepath: str, konten: str, overwrite: bool = False) -> str:
             if not _ok:
                 return _msg
         except Exception as e:
-            return f"Error: Approval gate failed: {str(e)}"
+            return f"Error: Approval gate failed: {e!s}"
         if os.path.exists(filepath) and not overwrite:
             return f"Error: File '{filepath}' sudah ada. Gunakan overwrite=True untuk menimpa."
         parent = os.path.dirname(filepath)
@@ -145,7 +146,7 @@ def tulis_kode(filepath: str, konten: str, overwrite: bool = False) -> str:
             f.write(konten)
         return f"File berhasil dibuat di {filepath}"
     except Exception as e:
-        return f"Gagal menulis file: {str(e)}"
+        return f"Gagal menulis file: {e!s}"
 
 
 @tool
@@ -155,12 +156,12 @@ def baca_file(filepath: str) -> str:
         _path_ok, filepath = _safe_path(filepath)
         if not _path_ok:
             return filepath
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return "Error: File tidak ditemukan."
     except Exception as e:
-        return f"Error saat membaca file: {str(e)}"
+        return f"Error saat membaca file: {e!s}"
 
 
 @tool
@@ -169,11 +170,11 @@ def info_sistem() -> str:
     GPU, Redis, PostgreSQL. Tanpa argumen. Tanpa akses jaringan/infra berat
     (probe lokal bertimeout singkat, hasil di-cache 5 menit)."""
     try:
-        from src.core.sysinfo import get_sysinfo_block
+        from src.core.system.sysinfo import get_sysinfo_block
 
         return get_sysinfo_block()
     except Exception as e:
-        return f"Gagal membaca info sistem: {str(e)}"
+        return f"Gagal membaca info sistem: {e!s}"
 
 
 @tool
@@ -189,8 +190,8 @@ def set_target_dir(path: str) -> str:
         path: Path folder absolut pilihan user, mis. F:/bdk atau /home/user/proj.
     """
     try:
-        from src.core.approval import current_session
-        from src.core.workspaces import note_target_dir
+        from src.core.auth.approval import current_session
+        from src.core.system.workspaces import note_target_dir
 
         try:
             session_id = current_session.get() or ""
@@ -202,12 +203,9 @@ def set_target_dir(path: str) -> str:
         ok, result = note_target_dir(session_id, path)
         if not ok:
             return result
-        return (
-            f"Direktori kerja session ini dicatat: {result}. "
-            "tulis_kode kini boleh menulis di dalamnya."
-        )
+        return f"Direktori kerja session ini dicatat: {result}. tulis_kode kini boleh menulis di dalamnya."
     except Exception as e:
-        return f"Gagal mencatat direktori: {str(e)}"
+        return f"Gagal mencatat direktori: {e!s}"
 
 
 @tool
@@ -218,25 +216,21 @@ def cari_web(query: str) -> str:
 
         async def _search():
             # Tavily dulu, fallback ke Exa bila gagal
-            result = await mcp_manager.call_tool(
-                "tavily", "tavily_search", {"query": query, "max_results": 5}
-            )
+            result = await mcp_manager.call_tool("tavily", "tavily_search", {"query": query, "max_results": 5})
             if isinstance(result, str) and result.startswith("Error"):
-                result = await mcp_manager.call_tool(
-                    "exa", "exa_search", {"query": query, "max_results": 5}
-                )
+                result = await mcp_manager.call_tool("exa", "exa_search", {"query": query, "max_results": 5})
             return result
 
         result = asyncio.run(_search())
         # Extract text from MCP result
-        from src.core.text import extract_text
+        from src.core.llm.text import extract_text
 
         if hasattr(result, "content") and result.content:
             text = extract_text(result.content, sep="\n\n")
             return text or str(result)
         return str(result)
     except Exception as e:
-        return f"Gagal mencari web: {str(e)}"
+        return f"Gagal mencari web: {e!s}"
 
 
 @tool
@@ -262,11 +256,7 @@ def learn_keyword(agent: str, keyword: str, allowed_tools: str = "") -> str:
     if not keyword:
         return "Error: keyword tidak boleh kosong."
 
-    tools_list = (
-        [t.strip() for t in allowed_tools.split(",") if t.strip()]
-        if allowed_tools
-        else []
-    )
+    tools_list = [t.strip() for t in allowed_tools.split(",") if t.strip()] if allowed_tools else []
 
     ok = add_keyword_with_tools(agent, keyword, tools_list)
     if ok:
@@ -311,11 +301,9 @@ def minta_review(pertanyaan: str, konteks: str) -> str:
         response = llm.invoke(
             f"{_ADVISOR_PROMPT}\n\n## Konteks pekerjaan\n{konteks[:3000]}\n\n## Pertanyaan agen\n{pertanyaan}"
         )
-        from src.core.text import extract_text
+        from src.core.llm.text import extract_text
 
-        content = extract_text(
-            response.content if hasattr(response, "content") else str(response)
-        )
+        content = extract_text(response.content if hasattr(response, "content") else str(response))
         return f"Nasihat reviewer:\n{content}"
     except Exception as e:
         return f"Gagal meminta review: {str(e)[:200]}"
@@ -329,11 +317,11 @@ def baca_url(url: str, max_karakter: int = 8000) -> str:
         url: URL http/https yang ingin dibaca.
         max_karakter: Batas panjang teks (default 8000).
     """
+    import ipaddress
     import re
     import socket
-    import ipaddress
     from html.parser import HTMLParser
-    from urllib.parse import urlparse, urljoin
+    from urllib.parse import urljoin, urlparse
 
     class _TextOnly(HTMLParser):
         def __init__(self):
@@ -348,10 +336,7 @@ def baca_url(url: str, max_karakter: int = 8000) -> str:
                 self.parts.append("\n")
 
         def handle_endtag(self, tag):
-            if (
-                tag in ("script", "style", "nav", "header", "footer", "noscript")
-                and self._skip
-            ):
+            if tag in ("script", "style", "nav", "header", "footer", "noscript") and self._skip:
                 self._skip -= 1
 
         def handle_data(self, data):
@@ -402,12 +387,10 @@ def baca_url(url: str, max_karakter: int = 8000) -> str:
     def _resolve_and_validate(hostname: str) -> str:
         """DNS resolve + reject if result is private/loopback/link-local."""
         try:
-            infos = socket.getaddrinfo(
-                hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
-            )
+            infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
         except socket.gaierror:
             return ""
-        for family, _, _, _, sockaddr in infos:
+        for _family, _, _, _, sockaddr in infos:
             ip = sockaddr[0]
             if _is_ip_private(ip):
                 return ""
@@ -437,9 +420,7 @@ def baca_url(url: str, max_karakter: int = 8000) -> str:
         if not re.match(r"^[a-zA-Z0-9._-]+$", hostname):
             return False
         # DNS resolve + IP validation
-        if not _resolve_and_validate(hostname):
-            return False
-        return True
+        return _resolve_and_validate(hostname)
 
     def _fetch_with_ssrf_protection(target_url: str) -> str:
         """Fetch URL with SSRF protection: scheme/host/IP validation, redirect revalidation."""
@@ -455,9 +436,7 @@ def baca_url(url: str, max_karakter: int = 8000) -> str:
 
         ctx = ssl.create_default_context()
         if parsed.scheme == "https":
-            conn = http.client.HTTPSConnection(
-                hostname, port, timeout=_CONNECT_TIMEOUT, context=ctx
-            )
+            conn = http.client.HTTPSConnection(hostname, port, timeout=_CONNECT_TIMEOUT, context=ctx)
         else:
             conn = http.client.HTTPConnection(hostname, port, timeout=_CONNECT_TIMEOUT)
 
@@ -503,20 +482,14 @@ def baca_url(url: str, max_karakter: int = 8000) -> str:
                 conn.close()
                 parsed_next = urlparse(next_url)
                 hostname = parsed_next.hostname
-                port = parsed_next.port or (
-                    443 if parsed_next.scheme == "https" else 80
-                )
+                port = parsed_next.port or (443 if parsed_next.scheme == "https" else 80)
                 path = parsed_next.path or "/"
                 if parsed_next.query:
                     path += "?" + parsed_next.query
                 if parsed_next.scheme == "https":
-                    conn = http.client.HTTPSConnection(
-                        hostname, port, timeout=_CONNECT_TIMEOUT, context=ctx
-                    )
+                    conn = http.client.HTTPSConnection(hostname, port, timeout=_CONNECT_TIMEOUT, context=ctx)
                 else:
-                    conn = http.client.HTTPConnection(
-                        hostname, port, timeout=_CONNECT_TIMEOUT
-                    )
+                    conn = http.client.HTTPConnection(hostname, port, timeout=_CONNECT_TIMEOUT)
                 headers["Host"] = hostname
                 current_url = next_url
                 continue
@@ -572,8 +545,8 @@ def jalankan_python(kode: str = "", filepath: str = "", timeout_detik: int = 30)
     import sys
 
     try:
-        from src.core.approval import ensure_approved
-        from src.core.auth import get_current_user_id
+        from src.core.auth.approval import ensure_approved
+        from src.core.auth.auth import get_current_user_id
 
         _ok, _msg = ensure_approved(
             "jalankan_python",
@@ -583,7 +556,7 @@ def jalankan_python(kode: str = "", filepath: str = "", timeout_detik: int = 30)
         if not _ok:
             return _msg
     except Exception as e:
-        return f"Error: Approval gate failed: {str(e)}"
+        return f"Error: Approval gate failed: {e!s}"
     if not kode and not filepath:
         return "Error: Isi salah satu: kode atau filepath."
     timeout_detik = max(1, min(int(timeout_detik), 120))
@@ -620,14 +593,12 @@ class CodeExecutionSandbox:
     - No subprocess escalation
     """
 
-    _SAFE_ENV = {"PATH", "PYTHONUNBUFFERED", "TMPDIR", "TEMP", "TMP"}
+    _SAFE_ENV: ClassVar[set[str]] = {"PATH", "PYTHONUNBUFFERED", "TMPDIR", "TEMP", "TMP"}
 
     def __init__(self, workdir: str | None = None):
         import os
 
-        self._workdir = workdir or os.path.abspath(
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-        )
+        self._workdir = workdir or os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
         self._env = {k: v for k, v in os.environ.items() if k in self._SAFE_ENV}
         self._env.setdefault("PYTHONUNBUFFERED", "1")
 
@@ -638,7 +609,6 @@ class CodeExecutionSandbox:
     def run(self, cmd: list, timeout: int = 30) -> tuple[int, str]:
         """Run command in sandbox. Returns (exit_code, output)."""
         import subprocess
-        import sys
 
         proc = subprocess.run(
             cmd,
@@ -648,6 +618,7 @@ class CodeExecutionSandbox:
             cwd=self._workdir,
             env=self._env,
             start_new_session=True,
+            check=False,
         )
         out = (proc.stdout or "") + (proc.stderr or "")
         return proc.returncode, out.strip() or "(tidak ada output)"
@@ -686,7 +657,7 @@ def panggil_mcp(server: str, tool: str, args_json: str = "{}") -> str:
 
         # P1.3 — Enforce MCP policy: server + tool must be allowlisted
         try:
-            from src.core.approval import check_mcp_policy
+            from src.core.auth.approval import check_mcp_policy
 
             allowed, deny_msg = check_mcp_policy(server, tool)
             if not allowed:
@@ -696,8 +667,8 @@ def panggil_mcp(server: str, tool: str, args_json: str = "{}") -> str:
 
         # P1.4 — Approval gate: fail-closed on exception
         try:
-            from src.core.approval import ensure_approved
-            from src.core.auth import get_current_user_id
+            from src.core.auth.approval import ensure_approved
+            from src.core.auth.auth import get_current_user_id
 
             _ok, _msg = ensure_approved(
                 "panggil_mcp",
@@ -713,7 +684,7 @@ def panggil_mcp(server: str, tool: str, args_json: str = "{}") -> str:
             return await mcp_manager.call_tool(server, tool, args)
 
         result = asyncio.run(_call())
-        from src.core.text import extract_text
+        from src.core.llm.text import extract_text
 
         if hasattr(result, "content") and result.content:
             text = extract_text(result.content, sep="\n\n")
@@ -726,7 +697,7 @@ def panggil_mcp(server: str, tool: str, args_json: str = "{}") -> str:
 def _pref_user() -> str:
     """P2.6 — Get current user for preference scoping. Never returns 'default'."""
     try:
-        from src.core.auth import get_current_user
+        from src.core.auth.auth import get_current_user
 
         uid = get_current_user()
         if uid and uid != "default":
@@ -746,9 +717,7 @@ def _pref_ensure_table(cur):
             updated_at TIMESTAMP DEFAULT NOW()
         );
     """)
-    cur.execute(
-        "ALTER TABLE preferensi ADD COLUMN IF NOT EXISTS user_id TEXT DEFAULT 'default';"
-    )
+    cur.execute("ALTER TABLE preferensi ADD COLUMN IF NOT EXISTS user_id TEXT DEFAULT 'default';")
     cur.execute("UPDATE preferensi SET user_id = 'default' WHERE user_id IS NULL;")
     cur.execute("""
         DO $$ BEGIN
@@ -766,6 +735,7 @@ def get_preferences_block() -> str:
     """Blok teks preferensi user untuk injeksi prompt. Kosong bila belum ada."""
     try:
         import psycopg2
+
         from src.config.routing_keywords_pg import DATABASE_URL
 
         conn = psycopg2.connect(DATABASE_URL)
@@ -803,6 +773,7 @@ def ingat_preferensi(key: str, value: str) -> str:
     """
     try:
         import psycopg2
+
         from src.config.routing_keywords_pg import DATABASE_URL
 
         key = key.strip().lower().replace(" ", "_")[:50]
@@ -838,7 +809,7 @@ def lihat_preferensi() -> str:
 def _proj_user() -> str:
     """P2.6 — Get current user for project scoping. Never returns 'default'."""
     try:
-        from src.core.auth import get_current_user
+        from src.core.auth.auth import get_current_user
 
         uid = get_current_user()
         if uid and uid != "default":
@@ -860,9 +831,7 @@ def _proj_ensure_table(cur):
             updated_at TIMESTAMP DEFAULT NOW()
         );
     """)
-    cur.execute(
-        "ALTER TABLE proyek ADD COLUMN IF NOT EXISTS user_id TEXT DEFAULT 'default';"
-    )
+    cur.execute("ALTER TABLE proyek ADD COLUMN IF NOT EXISTS user_id TEXT DEFAULT 'default';")
     cur.execute("UPDATE proyek SET user_id = 'default' WHERE user_id IS NULL;")
     cur.execute("""
         DO $$ BEGIN
@@ -880,6 +849,7 @@ def get_projects_block() -> str:
     """Blok proyek aktif untuk injeksi prompt. Kosong bila belum ada."""
     try:
         import psycopg2
+
         from src.config.routing_keywords_pg import DATABASE_URL
 
         conn = psycopg2.connect(DATABASE_URL)
@@ -922,6 +892,7 @@ def simpan_proyek(nama: str, goal: str, status: str = "aktif") -> str:
     """
     try:
         import psycopg2
+
         from src.config.routing_keywords_pg import DATABASE_URL
 
         nama = nama.strip().lower().replace(" ", "-")[:60]
@@ -959,6 +930,7 @@ def catat_proyek(nama: str, catatan: str) -> str:
     """
     try:
         import psycopg2
+
         from src.config.routing_keywords_pg import DATABASE_URL
 
         nama = nama.strip().lower().replace(" ", "-")[:60]
@@ -992,6 +964,1105 @@ def lihat_proyek() -> str:
     return block or "Belum ada proyek aktif."
 
 
+@tool
+def list_folder(path: str = ".") -> str:
+    """Menampilkan isi dari direktori (folder).
+
+    Args:
+        path: Path folder yang ingin dilihat. Default adalah direktori saat ini.
+    """
+    try:
+        _path_ok, path = _safe_path(path)
+        if not _path_ok:
+            return path
+        if not os.path.isdir(path):
+            return f"Error: '{path}' bukan direktori."
+        items = []
+        for item in sorted(os.listdir(path)):
+            full_path = os.path.join(path, item)
+            if os.path.isdir(full_path):
+                items.append(f"📁 {item}/")
+            else:
+                size = os.path.getsize(full_path)
+                if size < 1024:
+                    size_str = f"{size}B"
+                elif size < 1024 * 1024:
+                    size_str = f"{size / 1024:.1f}KB"
+                else:
+                    size_str = f"{size / (1024 * 1024):.1f}MB"
+                items.append(f"📄 {item} ({size_str})")
+        if not items:
+            return f"Folder '{path}' kosong."
+        return f"Isi folder '{path}':\n" + "\n".join(items)
+    except PermissionError:
+        return f"Error: Tidak ada akses ke '{path}'."
+    except Exception as e:
+        return f"Gagal membaca folder: {e!s}"
+
+
+@tool
+def buat_folder(path: str) -> str:
+    """Membuat direktori (folder) baru.
+
+    Args:
+        path: Path folder yang ingin dibuat. Akan membuat parent folder jika belum ada.
+    """
+    try:
+        _path_ok, path = _safe_path(path)
+        if not _path_ok:
+            return path
+        try:
+            from src.core.auth.approval import ensure_approved
+            from src.core.auth.auth import get_current_user_id
+
+            _ok, _msg = ensure_approved(
+                "buat_folder",
+                {"path": path},
+                owner_user_id=get_current_user_id(),
+            )
+            if not _ok:
+                return _msg
+        except Exception as e:
+            return f"Error: Approval gate failed: {e!s}"
+        if os.path.exists(path):
+            if os.path.isdir(path):
+                return f"Folder '{path}' sudah ada."
+            return f"Error: '{path}' sudah ada dan bukan folder."
+        os.makedirs(path, exist_ok=True)
+        return f"Folder '{path}' berhasil dibuat."
+    except Exception as e:
+        return f"Gagal membuat folder: {e!s}"
+
+
+@tool
+def hapus_file(path: str) -> str:
+    """Menghapus file atau folder (rekursif untuk folder).
+
+    Args:
+        path: Path file atau folder yang ingin dihapus.
+    """
+    try:
+        _path_ok, path = _safe_path(path)
+        if not _path_ok:
+            return path
+        try:
+            from src.core.auth.approval import ensure_approved
+            from src.core.auth.auth import get_current_user_id
+
+            _ok, _msg = ensure_approved(
+                "hapus_file",
+                {"path": path},
+                owner_user_id=get_current_user_id(),
+            )
+            if not _ok:
+                return _msg
+        except Exception as e:
+            return f"Error: Approval gate failed: {e!s}"
+        if not os.path.exists(path):
+            return f"Error: '{path}' tidak ditemukan."
+        if os.path.isdir(path):
+            import shutil
+
+            shutil.rmtree(path)
+            return f"Folder '{path}' berhasil dihapus (rekursif)."
+        os.remove(path)
+        return f"File '{path}' berhasil dihapus."
+    except PermissionError:
+        return f"Error: Tidak ada akses menghapus '{path}'."
+    except Exception as e:
+        return f"Gagal menghapus: {e!s}"
+
+
+@tool
+def rename_file(source: str, destination: str) -> str:
+    """Rename atau memindahkan file/folder.
+
+    Args:
+        source: Path sumber yang ingin di-rename/pindah.
+        destination: Path tujuan baru.
+    """
+    try:
+        _ok_src, source = _safe_path(source)
+        if not _ok_src:
+            return source
+        _ok_dst, destination = _safe_path(destination)
+        if not _ok_dst:
+            return destination
+        try:
+            from src.core.auth.approval import ensure_approved
+            from src.core.auth.auth import get_current_user_id
+
+            _ok, _msg = ensure_approved(
+                "rename_file",
+                {"source": source, "destination": destination},
+                owner_user_id=get_current_user_id(),
+            )
+            if not _ok:
+                return _msg
+        except Exception as e:
+            return f"Error: Approval gate failed: {e!s}"
+        if not os.path.exists(source):
+            return f"Error: '{source}' tidak ditemukan."
+        if os.path.exists(destination):
+            return f"Error: '{destination}' sudah ada."
+        os.rename(source, destination)
+        return f"'{source}' berhasil di-rename ke '{destination}'."
+    except PermissionError:
+        return f"Error: Tidak ada akses rename '{source}'."
+    except Exception as e:
+        return f"Gagal rename: {e!s}"
+
+
+@tool
+def download_file(url: str, destination: str = "") -> str:
+    """Mengunduh file dari URL ke lokal.
+
+    Args:
+        url: URL file yang ingin diunduh.
+        destination: Path tujuan penyimpanan. Jika kosong, file disimpan di folder saat ini dengan nama dari URL.
+    """
+    try:
+        import urllib.parse
+        import urllib.request
+
+        if not destination:
+            parsed = urllib.parse.urlparse(url)
+            filename = os.path.basename(parsed.path) or "downloaded_file"
+            destination = os.path.join(".", filename)
+
+        _path_ok, destination = _safe_path(destination)
+        if not _path_ok:
+            return destination
+
+        try:
+            from src.core.auth.approval import ensure_approved
+            from src.core.auth.auth import get_current_user_id
+
+            _ok, _msg = ensure_approved(
+                "download_file",
+                {"url": url, "destination": destination},
+                owner_user_id=get_current_user_id(),
+            )
+            if not _ok:
+                return _msg
+        except Exception as e:
+            return f"Error: Approval gate failed: {e!s}"
+
+        parent = os.path.dirname(destination)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+        urllib.request.urlretrieve(url, destination)  # noqa: S310
+        size = os.path.getsize(destination)
+        return f"File berhasil diunduh ke '{destination}' ({size} bytes)."
+    except Exception as e:
+        return f"Gagal mengunduh file: {e!s}"
+
+
+@tool
+def upload_file(filepath: str, url: str, method: str = "POST") -> str:
+    """Upload file ke server via HTTP.
+
+    Args:
+        filepath: Path file yang ingin diupload.
+        url: URL tujuan upload.
+        method: HTTP method (POST atau PUT).
+    """
+    try:
+        _path_ok, filepath = _safe_path(filepath)
+        if not _path_ok:
+            return filepath
+
+        if not os.path.exists(filepath):
+            return f"Error: File '{filepath}' tidak ditemukan."
+
+        try:
+            from src.core.auth.approval import ensure_approved
+            from src.core.auth.auth import get_current_user_id
+
+            _ok, _msg = ensure_approved(
+                "upload_file",
+                {"filepath": filepath, "url": url, "method": method},
+                owner_user_id=get_current_user_id(),
+            )
+            if not _ok:
+                return _msg
+        except Exception as e:
+            return f"Error: Approval gate failed: {e!s}"
+
+        import urllib.request
+
+        with open(filepath, "rb") as f:
+            data = f.read()
+
+        req = urllib.request.Request(url, data=data, method=method.upper())  # noqa: S310
+        req.add_header("Content-Type", "application/octet-stream")
+
+        with urllib.request.urlopen(req) as response:  # noqa: S310
+            status = response.getcode()
+            return f"File '{filepath}' berhasil diupload ke '{url}' (HTTP {status})."
+    except Exception as e:
+        return f"Gagal upload file: {e!s}"
+
+
+@tool
+def buka_url(url: str) -> str:
+    """Membuka URL di browser default sistem.
+
+    Args:
+        url: URL yang ingin dibuka.
+    """
+    try:
+        import webbrowser
+
+        webbrowser.open(url)
+        return f"URL '{url}' berhasil dibuka di browser."
+    except Exception as e:
+        return f"Gagal membuka URL: {e!s}"
+
+
+@tool
+def search_folder(path: str = ".", pattern: str = "*") -> str:
+    """Mencari file/folder berdasarkan pola nama di dalam direktori.
+
+    Args:
+        path: Direktori awal pencarian.
+        pattern: Pola nama file (menggunakan glob pattern seperti *.txt, *.py).
+    """
+    try:
+        _path_ok, path = _safe_path(path)
+        if not _path_ok:
+            return path
+
+        import glob
+
+        search_pattern = os.path.join(path, "**", pattern)
+        matches = glob.glob(search_pattern, recursive=True)
+
+        if not matches:
+            return f"Tidak ditemukan file dengan pola '{pattern}' di '{path}'."
+
+        results = []
+        for match in sorted(matches)[:50]:  # Limit 50 results
+            rel_path = os.path.relpath(match, path)
+            if os.path.isdir(match):
+                results.append(f"📁 {rel_path}/")
+            else:
+                size = os.path.getsize(match)
+                results.append(f"📄 {rel_path} ({size}B)")
+
+        return f"Hasil pencarian '{pattern}' di '{path}':\n" + "\n".join(results)
+    except Exception as e:
+        return f"Gagal mencari: {e!s}"
+
+
+@tool
+def info_file(path: str) -> str:
+    """Menampilkan informasi detail tentang file/folder.
+
+    Args:
+        path: Path file/folder yang ingin dilihat info-nya.
+    """
+    try:
+        _path_ok, path = _safe_path(path)
+        if not _path_ok:
+            return path
+
+        if not os.path.exists(path):
+            return f"Error: '{path}' tidak ditemukan."
+
+        import time
+
+        stat = os.stat(path)
+        is_dir = os.path.isdir(path)
+
+        info = []
+        info.append(f"Nama: {os.path.basename(path)}")
+        info.append(f"Jenis: {'Folder' if is_dir else 'File'}")
+        info.append(f"Path: {os.path.abspath(path)}")
+        info.append(f"Ukuran: {stat.st_size} bytes")
+        info.append(f"Dibuat: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_ctime))}")
+        info.append(f"Diubah: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))}")
+
+        if is_dir:
+            items = os.listdir(path)
+            info.append(f"Jumlah item: {len(items)}")
+
+        return "\n".join(info)
+    except Exception as e:
+        return f"Gagal membaca info file: {e!s}"
+
+
+_OFFICE_CATEGORIES = {
+    "PDF": [
+        "extract_text",
+        "merge_pdfs",
+        "split_pdf",
+        "compress_pdf",
+        "add_watermark",
+        "fill_pdf_form",
+        "get_pdf_metadata",
+        "extract_tables",
+        "convert_pdf",
+    ],
+    "Spreadsheet": [
+        "read_xlsx",
+        "create_xlsx",
+        "apply_formula",
+        "create_chart",
+        "analyze_data",
+        "format_cells",
+        "xlsx_to_csv",
+        "csv_to_xlsx",
+        "json_to_xlsx",
+        "xlsx_to_json",
+    ],
+    "Document": [
+        "create_docx",
+        "edit_docx",
+        "merge_docx",
+        "template_fill",
+        "docx_to_md",
+        "md_to_docx",
+        "html_to_docx",
+    ],
+    "Presentation": [
+        "create_pptx",
+        "extract_pptx",
+        "md_to_pptx",
+        "md_to_slides",
+        "add_notes",
+        "export_pptx",
+    ],
+}
+
+
+def _run_office_op(op: str, args: dict) -> str:
+    """Eksekusi operasi office menggunakan Python library."""
+    input_path = args.get("input", "")
+    output_path = args.get("output", "")
+
+    # --- PDF Operations ---
+    if op == "extract_text":
+        try:
+            import fitz  # PyMuPDF
+
+            doc = fitz.open(input_path)
+            texts = [page.get_text() for page in doc]
+            doc.close()
+            return "\n---\n".join(texts)
+        except ImportError:
+            return "Error: pyMuPDF belum install. Jalankan: pip install pymupdf"
+
+    elif op == "merge_pdfs":
+        try:
+            from PyPDF2 import PdfMerger
+
+            inputs = args.get("inputs", [input_path])
+            merger = PdfMerger()
+            for f in inputs:
+                merger.append(f)
+            merger.write(output_path)
+            merger.close()
+            return f"OK: {len(inputs)} PDF digabung -> {output_path}"
+        except ImportError:
+            return "Error: PyPDF2 belum install. Jalankan: pip install PyPDF2"
+
+    elif op == "split_pdf":
+        try:
+            from PyPDF2 import PdfReader, PdfWriter
+
+            pages = args.get("pages", [])  # list of page ranges [[1,3],[5,5]]
+            reader = PdfReader(input_path)
+            for i, (start, end) in enumerate(pages):
+                writer = PdfWriter()
+                for p in range(start - 1, min(end, len(reader.pages))):
+                    writer.add_page(reader.pages[p])
+                out = output_path.replace(".pdf", f"_part{i + 1}.pdf") if len(pages) > 1 else output_path
+                with open(out, "wb") as f:
+                    writer.write(f)
+            return f"OK: PDF split -> {output_path} ({len(pages)} bagian)"
+        except ImportError:
+            return "Error: PyPDF2 belum install. Jalankan: pip install PyPDF2"
+
+    elif op == "compress_pdf":
+        try:
+            import fitz
+
+            doc = fitz.open(input_path)
+            doc.save(output_path, garbage=4, deflate=True)
+            doc.close()
+            return f"OK: PDF dikompres -> {output_path}"
+        except ImportError:
+            return "Error: pyMuPDF belum install. Jalankan: pip install pymupdf"
+
+    elif op == "add_watermark":
+        try:
+            import fitz
+
+            text = args.get("text", "CONFIDENTIAL")
+            fontsize = args.get("fontsize", 72)
+            color = args.get("color", [1, 0, 0])
+            rotation = args.get("rotation", 45)
+            doc = fitz.open(input_path)
+            for page in doc:
+                rect = page.rect
+                point = fitz.Point(rect.width / 3, rect.height / 2)
+                page.insert_text(
+                    point, text, fontsize=fontsize, color=color, rotate=rotation, overlay=True, fontname="helv"
+                )
+            doc.save(output_path)
+            doc.close()
+            return f"OK: Watermark '{text}' ditambahkan -> {output_path}"
+        except ImportError:
+            return "Error: pyMuPDF belum install. Jalankan: pip install pymupdf"
+
+    elif op == "fill_pdf_form":
+        try:
+            import fitz
+
+            form_data = args.get("data", {})
+            doc = fitz.open(input_path)
+            for page in doc:
+                for widget in page.widgets() or []:
+                    field_name = widget.field_name
+                    if field_name in form_data:
+                        widget.field_value = str(form_data[field_name])
+                        widget.update()
+            doc.save(output_path)
+            doc.close()
+            return f"OK: Form diisi ({len(form_data)} field) -> {output_path}"
+        except ImportError:
+            return "Error: pyMuPDF belum install. Jalankan: pip install pymupdf"
+
+    elif op == "get_pdf_metadata":
+        try:
+            import fitz
+
+            doc = fitz.open(input_path)
+            meta = doc.metadata
+            info = {
+                "pages": len(doc),
+                "title": meta.get("title", ""),
+                "author": meta.get("author", ""),
+                "subject": meta.get("subject", ""),
+            }
+            doc.close()
+            import json as _json
+
+            return _json.dumps(info, indent=2, ensure_ascii=False)
+        except ImportError:
+            return "Error: pyMuPDF belum install. Jalankan: pip install pymupdf"
+
+    elif op == "extract_tables":
+        try:
+            import json as _json
+
+            import fitz
+
+            doc = fitz.open(input_path)
+            all_tables = []
+            for i, page in enumerate(doc):
+                text = page.get_text()
+                lines = [line.strip() for line in text.split("\n") if line.strip()]
+                if lines:
+                    all_tables.append({"page": i + 1, "rows": len(lines), "preview": lines[:5]})
+            doc.close()
+            return _json.dumps(all_tables, indent=2, ensure_ascii=False)
+        except ImportError:
+            return "Error: pyMuPDF belum install. Jalankan: pip install pymupdf"
+
+    elif op == "convert_pdf":
+        try:
+            target = args.get("target_format", "txt")
+            import fitz
+
+            doc = fitz.open(input_path)
+            if target == "txt":
+                texts = [page.get_text() for page in doc]
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write("\n---\n".join(texts))
+            elif target == "images":
+                import os
+
+                os.makedirs(output_path, exist_ok=True)
+                for i, page in enumerate(doc):
+                    pix = page.get_pixmap(dpi=150)
+                    pix.save(f"{output_path}/page_{i + 1}.png")
+            doc.close()
+            return f"OK: PDF dikonversi ke {target} -> {output_path}"
+        except ImportError:
+            return "Error: pyMuPDF belum install. Jalankan: pip install pymupdf"
+
+    # --- Spreadsheet Operations ---
+    elif op == "read_xlsx":
+        try:
+            from openpyxl import load_workbook
+
+            wb = load_workbook(input_path, data_only=True)
+            result = {}
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                rows = []
+                for row in ws.iter_rows(values_only=True):
+                    rows.append([str(c) if c is not None else "" for c in row])
+                result[sheet_name] = rows
+            wb.close()
+            import json as _json
+
+            return _json.dumps(result, indent=2, ensure_ascii=False)
+        except ImportError:
+            return "Error: openpyxl belum install. Jalankan: pip install openpyxl"
+
+    elif op == "create_xlsx":
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Alignment, Font, PatternFill
+
+            data = args.get("data", [])
+            headers = args.get("headers", [])
+            title = args.get("title", "Sheet1")
+            wb = Workbook()
+            ws = wb.active
+            ws.title = title
+            if headers:
+                ws.append(headers)
+                for cell in ws[1]:
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill("solid", fgColor="4472C4")
+                    cell.alignment = Alignment(horizontal="center")
+            for row in data:
+                ws.append(row)
+            for col in ws.columns:
+                max_len = max(len(str(c.value or "")) for c in col)
+                ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 50)
+            wb.save(output_path)
+            return f"OK: Excel dibuat -> {output_path} ({len(data)} baris)"
+        except ImportError:
+            return "Error: openpyxl belum install. Jalankan: pip install openpyxl"
+
+    elif op == "apply_formula":
+        try:
+            from openpyxl import load_workbook
+
+            wb = load_workbook(input_path)
+            ws = wb.active
+            cell = args.get("cell", "D1")
+            formula = args.get("formula", "=SUM(A1:C1)")
+            ws[cell] = formula
+            wb.save(output_path)
+            return f"OK: Formula '{formula}' diapply ke {cell} -> {output_path}"
+        except ImportError:
+            return "Error: openpyxl belum install. Jalankan: pip install openpyxl"
+
+    elif op == "create_chart":
+        try:
+            from openpyxl import load_workbook
+            from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+
+            wb = load_workbook(input_path)
+            ws = wb.active
+            chart_type = args.get("type", "bar")
+            title = args.get("title", "Chart")
+            data_ref = Reference(ws, min_col=2, min_row=1, max_col=4, max_row=min(ws.max_row, 10))
+            cats_ref = Reference(ws, min_col=1, min_row=2, max_row=min(ws.max_row, 10))
+            chart = {"bar": BarChart, "pie": PieChart, "line": LineChart}.get(chart_type, BarChart)()
+            chart.title = title
+            chart.add_data(data_ref, titles_from_data=True)
+            chart.set_categories(cats_ref)
+            pos = args.get("position", "E1")
+            ws.add_chart(chart, pos)
+            wb.save(output_path)
+            return f"OK: Chart {chart_type} dibuat di {pos} -> {output_path}"
+        except ImportError:
+            return "Error: openpyxl belum install. Jalankan: pip install openpyxl"
+
+    elif op == "analyze_data":
+        try:
+            from openpyxl import load_workbook
+
+            wb = load_workbook(input_path, data_only=True)
+            ws = wb.active
+            stats = {"total_rows": ws.max_row, "total_cols": ws.max_column, "sheets": wb.sheetnames}
+            numeric_cols = []
+            for col in range(1, ws.max_column + 1):
+                values = []
+                for row in range(2, min(ws.max_row + 1, 100)):
+                    v = ws.cell(row=row, column=col).value
+                    if isinstance(v, (int, float)):
+                        values.append(v)
+                if values:
+                    col_letter = ws.cell(row=1, column=col).value or f"Col{col}"
+                    numeric_cols.append(
+                        {
+                            "column": str(col_letter),
+                            "count": len(values),
+                            "sum": round(sum(values), 2),
+                            "avg": round(sum(values) / len(values), 2),
+                            "min": min(values),
+                            "max": max(values),
+                        }
+                    )
+            stats["numeric_columns"] = numeric_cols
+            wb.close()
+            import json as _json
+
+            return _json.dumps(stats, indent=2, ensure_ascii=False)
+        except ImportError:
+            return "Error: openpyxl belum install. Jalankan: pip install openpyxl"
+
+    elif op == "format_cells":
+        try:
+            from openpyxl import load_workbook
+            from openpyxl.styles import Alignment, Font, PatternFill
+
+            wb = load_workbook(input_path)
+            ws = wb.active
+            cell_range = args.get("range", "A1")
+            bold = args.get("bold", False)
+            bg_color = args.get("bg_color")
+            font_color = args.get("font_color")
+            for row in ws[cell_range]:
+                for cell in row:
+                    if bold:
+                        cell.font = Font(bold=True)
+                    if bg_color:
+                        cell.fill = PatternFill("solid", fgColor=bg_color)
+                    if font_color:
+                        cell.font = Font(color=font_color)
+            wb.save(output_path)
+            return f"OK: Format diapply ke {cell_range} -> {output_path}"
+        except ImportError:
+            return "Error: openpyxl belum install. Jalankan: pip install openpyxl"
+
+    elif op == "xlsx_to_csv":
+        try:
+            import csv
+
+            from openpyxl import load_workbook
+
+            wb = load_workbook(input_path, data_only=True)
+            ws = wb.active
+            with open(output_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                for row in ws.iter_rows(values_only=True):
+                    writer.writerow([str(c) if c is not None else "" for c in row])
+            wb.close()
+            return f"OK: XLSX -> CSV -> {output_path}"
+        except ImportError:
+            return "Error: openpyxl belum install. Jalankan: pip install openpyxl"
+
+    elif op == "csv_to_xlsx":
+        try:
+            import csv
+
+            from openpyxl import Workbook
+
+            wb = Workbook()
+            ws = wb.active
+            with open(input_path, encoding="utf-8") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    ws.append(row)
+            wb.save(output_path)
+            return f"OK: CSV -> XLSX -> {output_path}"
+        except ImportError:
+            return "Error: openpyxl belum install. Jalankan: pip install openpyxl"
+
+    elif op == "json_to_xlsx":
+        try:
+            import json as _json
+
+            from openpyxl import Workbook
+
+            data = args.get("data", [])
+            wb = Workbook()
+            ws = wb.active
+            if data:
+                headers = list(data[0].keys())
+                ws.append(headers)
+                for row in data:
+                    ws.append([row.get(h, "") for h in headers])
+            wb.save(output_path)
+            return f"OK: JSON -> XLSX -> {output_path} ({len(data)} baris)"
+        except ImportError:
+            return "Error: openpyxl belum install. Jalankan: pip install openpyxl"
+
+    elif op == "xlsx_to_json":
+        try:
+            import json as _json
+
+            from openpyxl import load_workbook
+
+            wb = load_workbook(input_path, data_only=True)
+            ws = wb.active
+            rows = list(ws.iter_rows(values_only=True))
+            if not rows:
+                return "[]"
+            headers = [str(h) for h in rows[0]]
+            data = []
+            for row in rows[1:]:
+                data.append(dict(zip(headers, [str(c) if c is not None else "" for c in row], strict=False)))
+            wb.close()
+            return _json.dumps(data, indent=2, ensure_ascii=False)
+        except ImportError:
+            return "Error: openpyxl belum install. Jalankan: pip install openpyxl"
+
+    # --- Document Operations ---
+    elif op == "create_docx":
+        try:
+            from docx import Document
+
+            doc = Document()
+            title = args.get("title", "")
+            content = args.get("content", "")
+            paragraphs = args.get("paragraphs", [])
+            if title:
+                doc.add_heading(title, 0)
+            if content:
+                doc.add_paragraph(content)
+            for p in paragraphs:
+                if isinstance(p, dict):
+                    style = p.get("style", "Normal")
+                    text = p.get("text", "")
+                    doc.add_paragraph(text, style=style)
+                else:
+                    doc.add_paragraph(str(p))
+            doc.save(output_path)
+            return f"OK: Word dibuat -> {output_path}"
+        except ImportError:
+            return "Error: python-docx belum install. Jalankan: pip install python-docx"
+
+    elif op == "edit_docx":
+        try:
+            from docx import Document
+
+            doc = Document(input_path)
+            action = args.get("action", "append")
+            if action == "append":
+                content = args.get("content", "")
+                paragraphs = args.get("paragraphs", [])
+                if content:
+                    doc.add_paragraph(content)
+                for p in paragraphs:
+                    doc.add_paragraph(str(p))
+            elif action == "replace":
+                old_text = args.get("old_text", "")
+                new_text = args.get("new_text", "")
+                for p in doc.paragraphs:
+                    if old_text in p.text:
+                        p.text = p.text.replace(old_text, new_text)
+            doc.save(output_path)
+            return f"OK: Word diedit -> {output_path}"
+        except ImportError:
+            return "Error: python-docx belum install. Jalankan: pip install python-docx"
+
+    elif op == "merge_docx":
+        try:
+            from docx import Document
+
+            inputs = args.get("inputs", [input_path])
+            merged = Document()
+            for f in inputs:
+                doc = Document(f)
+                for p in doc.paragraphs:
+                    merged.add_paragraph(p.text, style=p.style)
+            merged.save(output_path)
+            return f"OK: {len(inputs)} Word digabung -> {output_path}"
+        except ImportError:
+            return "Error: python-docx belum install. Jalankan: pip install python-docx"
+
+    elif op == "template_fill":
+        try:
+            from docx import Document
+
+            doc = Document(input_path)
+            replacements = args.get("replacements", {})
+            for p in doc.paragraphs:
+                for key, value in replacements.items():
+                    if key in p.text:
+                        p.text = p.text.replace(key, str(value))
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for key, value in replacements.items():
+                            if key in cell.text:
+                                cell.text = cell.text.replace(key, str(value))
+            doc.save(output_path)
+            return f"OK: Template diisi ({len(replacements)} field) -> {output_path}"
+        except ImportError:
+            return "Error: python-docx belum install. Jalankan: pip install python-docx"
+
+    elif op == "docx_to_md":
+        try:
+            from docx import Document
+
+            doc = Document(input_path)
+            md_lines = []
+            for p in doc.paragraphs:
+                if p.style.name.startswith("Heading"):
+                    level = int(p.style.name[-1]) if p.style.name[-1].isdigit() else 1
+                    md_lines.append(f"{'#' * level} {p.text}")
+                elif p.style.name == "List Bullet":
+                    md_lines.append(f"- {p.text}")
+                elif p.style.name == "List Number":
+                    md_lines.append(f"1. {p.text}")
+                else:
+                    md_lines.append(p.text)
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write("\n\n".join(md_lines))
+            return f"OK: Word -> Markdown -> {output_path}"
+        except ImportError:
+            return "Error: python-docx belum install. Jalankan: pip install python-docx"
+
+    elif op == "md_to_docx":
+        try:
+            from docx import Document
+
+            with open(input_path, encoding="utf-8") as f:
+                content = f.read()
+            doc = Document()
+            lines = content.split("\n")
+            for raw_line in lines:
+                stripped = raw_line.strip()
+                if not stripped:
+                    doc.add_paragraph("")
+                elif stripped.startswith("# "):
+                    doc.add_heading(stripped[2:], 1)
+                elif stripped.startswith("## "):
+                    doc.add_heading(stripped[3:], 2)
+                elif stripped.startswith("### "):
+                    doc.add_heading(stripped[4:], 3)
+                elif stripped.startswith("- "):
+                    doc.add_paragraph(stripped[2:], style="List Bullet")
+                elif stripped.startswith("1. "):
+                    doc.add_paragraph(stripped[3:], style="List Number")
+                else:
+                    doc.add_paragraph(stripped)
+            doc.save(output_path)
+            return f"OK: Markdown -> Word -> {output_path}"
+        except ImportError:
+            return "Error: python-docx belum install. Jalankan: pip install python-docx"
+
+    elif op == "html_to_docx":
+        try:
+            from html.parser import HTMLParser
+
+            from docx import Document
+
+            with open(input_path, encoding="utf-8") as f:
+                html_content = f.read()
+            doc = Document()
+
+            class SimpleHTMLParser(HTMLParser):
+                def __init__(self, doc):
+                    super().__init__()
+                    self.doc = doc
+                    self.current_text = ""
+
+                def handle_data(self, data):
+                    self.current_text += data
+
+                def handle_endtag(self, tag):
+                    if tag in ("p", "div", "br"):
+                        if self.current_text.strip():
+                            self.doc.add_paragraph(self.current_text.strip())
+                        self.current_text = ""
+
+            parser = SimpleHTMLParser(doc)
+            parser.feed(html_content)
+            if parser.current_text.strip():
+                doc.add_paragraph(parser.current_text.strip())
+            doc.save(output_path)
+            return f"OK: HTML -> Word -> {output_path}"
+        except ImportError:
+            return "Error: python-docx belum install. Jalankan: pip install python-docx"
+
+    # --- Presentation Operations ---
+    elif op == "create_pptx":
+        try:
+            from pptx import Presentation
+
+            prs = Presentation()
+            slides_data = args.get("slides", [])
+            title = args.get("title", "")
+            if title and not slides_data:
+                slides_data = [{"title": title, "content": args.get("content", "")}]
+            for slide_info in slides_data:
+                layout = prs.slide_layouts[1]  # Title and Content
+                slide = prs.slides.add_slide(layout)
+                slide.shapes.title.text = slide_info.get("title", "Slide")
+                body = slide.placeholders[1]
+                content = slide_info.get("content", "")
+                if isinstance(content, list):
+                    body.text = "\n".join(content)
+                else:
+                    body.text = str(content)
+            prs.save(output_path)
+            return f"OK: PowerPoint dibuat -> {output_path} ({len(slides_data)} slides)"
+        except ImportError:
+            return "Error: python-pptx belum install. Jalankan: pip install python-pptx"
+
+    elif op == "extract_pptx":
+        try:
+            from pptx import Presentation
+
+            prs = Presentation(input_path)
+            result = []
+            for i, slide in enumerate(prs.slides):
+                slide_data = {"slide": i + 1, "texts": []}
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        slide_data["texts"].append(shape.text.strip())
+                result.append(slide_data)
+            import json as _json
+
+            return _json.dumps(result, indent=2, ensure_ascii=False)
+        except ImportError:
+            return "Error: python-pptx belum install. Jalankan: pip install python-pptx"
+
+    elif op == "md_to_pptx":
+        try:
+            from pptx import Presentation
+
+            with open(input_path, encoding="utf-8") as f:
+                content = f.read()
+            prs = Presentation()
+            slides = content.split("\n---\n")
+            for slide_content in slides:
+                lines = [line.strip() for line in slide_content.strip().split("\n") if line.strip()]
+                if not lines:
+                    continue
+                title = lines[0].lstrip("# ").strip()
+                body_text = "\n".join(lines[1:])
+                layout = prs.slide_layouts[1]
+                slide = prs.slides.add_slide(layout)
+                slide.shapes.title.text = title
+                slide.placeholders[1].text = body_text
+            prs.save(output_path)
+            return f"OK: Markdown -> PowerPoint -> {output_path} ({len(slides)} slides)"
+        except ImportError:
+            return "Error: python-pptx belum install. Jalankan: pip install python-pptx"
+
+    elif op == "md_to_slides":
+        return _run_office_op("md_to_pptx", args)
+
+    elif op == "add_notes":
+        try:
+            from pptx import Presentation
+
+            prs = Presentation(input_path)
+            slide_num = args.get("slide", 1) - 1
+            notes = args.get("notes", "")
+            if 0 <= slide_num < len(prs.slides):
+                slide = prs.slides[slide_num]
+                if not slide.has_notes_slide:
+                    _ = slide.notes_slide
+                notes_slide = slide.notes_slide
+                notes_slide.notes_text_frame.text = notes
+                prs.save(output_path)
+                return f"OK: Catatan ditambahkan ke slide {slide_num + 1} -> {output_path}"
+            return f"Error: Slide {slide_num + 1} tidak ditemukan"
+        except ImportError:
+            return "Error: python-pptx belum install. Jalankan: pip install python-pptx"
+
+    elif op == "export_pptx":
+        try:
+            from pptx import Presentation
+
+            prs = Presentation(input_path)
+            export_format = args.get("format", "images")
+            if export_format == "images":
+                import os
+
+                os.makedirs(output_path, exist_ok=True)
+
+                for i, slide in enumerate(prs.slides):
+                    # Export slide as text summary
+                    texts = []
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text") and shape.text.strip():
+                            texts.append(shape.text.strip())
+                    with open(f"{output_path}/slide_{i + 1}.txt", "w", encoding="utf-8") as f:
+                        f.write("\n".join(texts))
+                return f"OK: Slides diekspor ke {output_path}"
+            return f"Error: Format export '{export_format}' tidak didukung"
+        except ImportError:
+            return "Error: python-pptx belum install. Jalankan: pip install python-pptx"
+
+    else:
+        available = []
+        for _cat, ops in _OFFICE_CATEGORIES.items():
+            available.extend(ops)
+        return (
+            f"Error: Operasi '{op}' belum diimplementasi.\nOperasi yang tersedia:\n{', '.join(sorted(set(available)))}"
+        )
+
+
+@tool
+def office_tool(operation: str, args_json: str = "{}") -> str:
+    """Tool Office untuk operasi dokumen (PDF, Word, Excel, PowerPoint).
+
+    39 operasi tersedia untuk manipulasi dokumen. File input harus ada di
+    sistem. File output disimpan di output/ atau path yang ditentukan.
+
+    Args:
+        operation: Nama operasi. Lihat daftar lengkap di bawah.
+        args_json: Argumen sebagai JSON string. Contoh:
+            '{"input": "file.pdf", "output": "output.pdf", "text": "CONFIDENTIAL"}'
+
+    Kategori operasi:
+    - PDF: extract_text, merge_pdfs, split_pdf, compress_pdf, add_watermark,
+           fill_pdf_form, get_pdf_metadata, extract_tables, convert_pdf
+    - Spreadsheet: read_xlsx, create_xlsx, apply_formula, create_chart,
+                   analyze_data, format_cells, xlsx_to_csv, csv_to_xlsx,
+                   json_to_xlsx, xlsx_to_json
+    - Document: create_docx, edit_docx, merge_docx, template_fill,
+                docx_to_md, md_to_docx, html_to_docx
+    - Presentation: create_pptx, extract_pptx, md_to_pptx, md_to_slides,
+                     add_notes, export_pptx
+    """
+    import json as _json
+
+    try:
+        op = operation.strip()
+        all_ops = set()
+        for ops in _OFFICE_CATEGORIES.values():
+            all_ops.update(ops)
+
+        if op not in all_ops:
+            available = []
+            for _cat, ops in _OFFICE_CATEGORIES.items():
+                available.extend(ops)
+            return f"Error: Operasi '{op}' tidak dikenal.\nOperasi yang tersedia:\n{', '.join(sorted(available))}"
+
+        try:
+            args = _json.loads(args_json) if args_json.strip() else {}
+        except _json.JSONDecodeError:
+            return "Error: args_json bukan JSON valid."
+        if not isinstance(args, dict):
+            return "Error: args_json harus object JSON."
+
+        # Approval gate
+        try:
+            from src.core.auth.approval import ensure_approved
+            from src.core.auth.auth import get_current_user_id
+
+            _ok, _msg = ensure_approved(
+                "office_tool",
+                {"operation": op, "args": args},
+                owner_user_id=get_current_user_id(),
+            )
+            if not _ok:
+                return _msg
+        except Exception as exc:
+            return f"Error: Approval gate unavailable; action denied. {exc}"
+
+        return _run_office_op(op, args)
+    except Exception as e:
+        return f"Gagal menjalankan office_tool ({operation}): {str(e)[:200]}"
+
+
 AVAILABLE_PLUGINS = {
     "tulis_kode": tulis_kode,
     "baca_file": baca_file,
@@ -1009,4 +2080,14 @@ AVAILABLE_PLUGINS = {
     "simpan_proyek": simpan_proyek,
     "catat_proyek": catat_proyek,
     "lihat_proyek": lihat_proyek,
+    "list_folder": list_folder,
+    "buat_folder": buat_folder,
+    "hapus_file": hapus_file,
+    "rename_file": rename_file,
+    "download_file": download_file,
+    "upload_file": upload_file,
+    "buka_url": buka_url,
+    "search_folder": search_folder,
+    "info_file": info_file,
+    "office_tool": office_tool,
 }

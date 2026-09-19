@@ -23,7 +23,7 @@ def _build_vector_store(directory_path: str):
 
     all_text = ""
     for md_file in path.rglob("*.md"):
-        with open(md_file, "r", encoding="utf-8") as f:
+        with open(md_file, encoding="utf-8") as f:
             all_text += f"\n--- [FILE: {md_file.name}] ---\n{f.read()}\n"
 
     if not all_text.strip():

@@ -108,6 +108,16 @@
       "env": {
         "FIRECRAWL_API_KEY": "Bearer ${FIRECRAWL_API_KEY}"
       }
+    },
+    "office": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "office-mcp@1.9.0"
+      ],
+      "env": {
+        "OFFICE_WORK_DIR": "${OFFICE_WORK_DIR:-E:/code/fr/output}"
+      }
     }
   }
 }

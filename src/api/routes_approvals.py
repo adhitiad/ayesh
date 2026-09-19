@@ -1,8 +1,8 @@
-from fastapi import APIRouter
-from fastapi import Request, HTTPException
-from src.core.auth import require_auth, require_owner
-from src.core.approval import list_pending, decide
-from src.core.db import connect
+from fastapi import APIRouter, HTTPException, Request
+
+from src.core.auth.approval import decide, list_pending
+from src.core.auth.auth import require_auth, require_owner
+from src.core.db.db import connect
 
 router = APIRouter()
 
@@ -13,7 +13,7 @@ def approvals_pending(request: Request):
 
 @router.post("/approvals/{aid}/approve")
 def approval_approve(request: Request, aid: str):
-    owner_user_id = require_auth(request)
+    require_auth(request)
     conn = connect()
     cur = conn.cursor()
     cur.execute("SELECT owner_user_id FROM pending_approvals WHERE id = %s;", (aid,))
@@ -32,7 +32,7 @@ def approval_approve(request: Request, aid: str):
 
 @router.post("/approvals/{aid}/deny")
 def approval_deny(request: Request, aid: str):
-    owner_user_id = require_auth(request)
+    require_auth(request)
     conn = connect()
     cur = conn.cursor()
     cur.execute("SELECT owner_user_id FROM pending_approvals WHERE id = %s;", (aid,))

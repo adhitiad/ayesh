@@ -1,8 +1,10 @@
 """Manage routing keywords in PostgreSQL long term memory."""
+import json
 import os
 import sys
-import json
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -11,6 +13,7 @@ if not DATABASE_URL:
     sys.exit(0)
 
 import psycopg2
+
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)

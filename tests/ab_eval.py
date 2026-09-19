@@ -18,7 +18,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -65,7 +65,7 @@ def main() -> int:
     cases = [c.strip() for c in args.cases.split(",") if c.strip()]
     print(f"A/B: varian={variants} kasus={cases}")
 
-    out = {"timestamp": datetime.now(timezone.utc).isoformat(), "variants": {}}
+    out = {"timestamp": datetime.now(UTC).isoformat(), "variants": {}}
     for v in variants:
         print(f"\n--- varian: {v} ---")
         res = run_variant(v, cases, args.delay)

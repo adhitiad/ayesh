@@ -149,7 +149,7 @@ def main() -> int:
     print("")
     for a in chosen:
         print(apply_agent(a))
-    print(f"\nSelesai. Skill aktif via /nama-skill. Cek: GET /skills")
+    print("\nSelesai. Skill aktif via /nama-skill. Cek: GET /skills")
     return 0
 
 

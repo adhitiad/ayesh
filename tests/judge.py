@@ -34,12 +34,12 @@ def parse_judge_output(text: str) -> dict:
 
 def judge_answer(question: str, answer: str) -> dict:
     """Panggil LLM sebagai juri. Butuh infra+LLM (opt-in)."""
-    from agents.llm_config import get_llm
+    from src.agents.llm_config import get_llm
     llm = get_llm()
     prompt = f"{RUBRIC}\nPertanyaan: {question[:800]}\nJawaban: {answer[:3000]}"
     try:
         response = llm.invoke(prompt)
-        from core.text import extract_text
+        from src.core.text import extract_text
         text = extract_text(response.content if hasattr(response, "content") else str(response))
         return parse_judge_output(text)
     except Exception as e:

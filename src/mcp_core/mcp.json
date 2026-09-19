@@ -1,0 +1,113 @@
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@modelcontextprotocol/server-github@2026.3.2"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@modelcontextprotocol/server-filesystem@2026.3.2",
+        "E:/"
+      ],
+      "env": {}
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@modelcontextprotocol/server-memory@2026.3.2"
+      ],
+      "env": {}
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@modelcontextprotocol/server-sequential-thinking@2026.3.2"
+      ]
+    },
+    "time": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-time==0.3.0"
+      ],
+      "env": {}
+    },
+    "context7": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "mcp-remote@0.1.26",
+        "https://mcp.context7.com/mcp"
+      ],
+      "env": {
+        "CONTEXT7_API_KEY": "Bearer ${CONTEXT7_API_KEY}"
+      }
+    },
+    "better-auth": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "mcp-remote@0.1.26",
+        "https://mcp.better-auth.com/mcp"
+      ],
+      "env": {}
+    },
+    "agent-platform-mcp": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "mcp-remote@0.1.26",
+        "https://aiplatform.googleapis.com/mcp/generate"
+      ],
+      "env": {}
+    },
+    "google-maps-platform-code-assist": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@googlemaps/code-assist-mcp@0.2.0"
+      ],
+      "env": {}
+    },
+    "exa": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "mcp-remote@0.1.26",
+        "https://mcp.exa.ai/mcp"
+      ],
+      "env": {
+        "EXA_API_KEY": "Bearer ${EXA_API_KEY}"
+      }
+    },
+    "tavily": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "mcp-remote@0.1.26",
+        "https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}"
+      ],
+      "env": {}
+    },
+    "firecrawl": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "mcp-remote@0.1.26",
+        "https://mcp.firecrawl.dev/v2/mcp"
+      ],
+      "env": {
+        "FIRECRAWL_API_KEY": "Bearer ${FIRECRAWL_API_KEY}"
+      }
+    }
+  }
+}

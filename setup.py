@@ -29,6 +29,7 @@ def log(ok: bool, msg: str) -> bool:
 def _host_python() -> str | None:
     """Interpreter untuk pip install. Exe frozen tak punya pip sendiri."""
     import shutil
+
     if not getattr(sys, "frozen", False):
         return sys.executable
     for cmd in ("python", "python3", "py"):
@@ -42,7 +43,7 @@ def _host_python() -> str | None:
             if r.returncode == 0:
                 return path
         except Exception:
-            continue
+            continue  # next python candidate
     return None
 
 
@@ -71,10 +72,17 @@ def main() -> int:
 
     ok_all = True
     print("== 1. Python & venv ==")
-    ok_all &= log(sys.version_info >= MIN_PYTHON,
-                   f"Python {sys.version.split()[0]} (butuh >= 3.11)")
+    ok_all &= log(
+        sys.version_info >= MIN_PYTHON,
+        f"Python {sys.version.split()[0]} (butuh >= 3.11)",
+    )
     in_venv = sys.prefix != sys.base_prefix
-    log(in_venv, "venv aktif" if in_venv else "venv TIDAK aktif (disarankan: python -m venv venv)")
+    log(
+        in_venv,
+        "venv aktif"
+        if in_venv
+        else "venv TIDAK aktif (disarankan: python -m venv venv)",
+    )
     if not (args.check_only or args.yes) and not in_venv:
         try:
             input("Lanjut tanpa venv? [Enter lanjut / Ctrl+C batal] ")
@@ -89,11 +97,18 @@ def main() -> int:
     else:
         _py = _host_python()
         if not _py:
-            ok_all &= log(False, "Python tak ditemukan (exe butuh Python terinstall untuk pip). "
-                                 "Install Python 3.11+, lalu: pip install -r requirements.txt")
+            ok_all &= log(
+                False,
+                "Python tak ditemukan (exe butuh Python terinstall untuk pip). "
+                "Install Python 3.11+, lalu: pip install -r requirements.txt",
+            )
             return 1
-        r = subprocess.run([_py, "-m", "pip", "install", "-r", "requirements.txt"],
-                           cwd=ROOT, capture_output=True, text=True)
+        r = subprocess.run(
+            [_py, "-m", "pip", "install", "-r", "requirements.txt"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
         ok_all &= log(r.returncode == 0, "pip install -r requirements.txt")
         if r.returncode != 0:
             print(r.stderr[-1500:])
@@ -114,14 +129,17 @@ def main() -> int:
     env = load_env_file(env_path)
     for k in ("DATABASE_URL", "REDIS_URL"):
         ok_all &= log(bool(env.get(k)), f"{k} terisi")
-    has_llm = any(env.get(k) and "your_" not in env.get(k, "") and "___" not in env.get(k, "")
-                  for k in ("GOOGLE_API_KEY", "NVIDIA_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY"))
+    has_llm = any(
+        env.get(k) and "your_" not in env.get(k, "") and "___" not in env.get(k, "")
+        for k in ("GOOGLE_API_KEY", "NVIDIA_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY")
+    )
     ok_all &= log(has_llm, "minimal 1 LLM API key terisi")
 
     print("== 4. PostgreSQL & Redis ==")
     try:
         sys.path.insert(0, str(ROOT))
         import psycopg2
+
         conn = psycopg2.connect(env.get("DATABASE_URL", ""), connect_timeout=5)
         conn.close()
         ok_all &= log(True, "PostgreSQL terhubung")
@@ -130,9 +148,14 @@ def main() -> int:
 
     try:
         import redis
+
         # protocol=2: server Redis lokal tua tak dukung RESP3 (alasan monkey-patch di main.py)
-        r = redis.from_url(env.get("REDIS_URL", "redis://localhost:6379/0"),
-                           socket_connect_timeout=3, socket_timeout=3, protocol=2)
+        r = redis.from_url(
+            env.get("REDIS_URL", "redis://localhost:6379/0"),
+            socket_connect_timeout=3,
+            socket_timeout=3,
+            protocol=2,
+        )
         r.ping()
         ok_all &= log(True, "Redis terhubung (RESP2)")
     except Exception as e:
@@ -144,9 +167,11 @@ def main() -> int:
 
     print("== 5. Tabel database ==")
     try:
-        from core.models import Base
+        from src.core.models import Base
+
         # buat engine dari DATABASE_URL .env (bukan env proses, agar setup deterministik)
         from sqlalchemy import create_engine as _ce
+
         eng = _ce(env.get("DATABASE_URL", ""), pool_pre_ping=True)
         Base.metadata.create_all(eng)
         ok_all &= log(True, "tabel dibuat/diverifikasi (create_all, aditif)")
@@ -154,9 +179,16 @@ def main() -> int:
         ok_all &= log(False, f"create_all gagal: {str(e)[:150]}")
 
     print("== 6. Skills ==")
-    skills = list((ROOT / "ayesh" / "skills").glob("*.md")) if (ROOT / "ayesh" / "skills").exists() else []
-    log(bool(skills), f"{len(skills)} skill di ayesh/skills/"
-        + ("" if skills else " — isi via: python install_agents.py"))
+    skills = (
+        list((ROOT / "ayesh" / "skills").glob("*.md"))
+        if (ROOT / "ayesh" / "skills").exists()
+        else []
+    )
+    log(
+        bool(skills),
+        f"{len(skills)} skill di ayesh/skills/"
+        + ("" if skills else " — isi via: python install_agents.py"),
+    )
     if not skills:
         print("     (boleh kosong; sistem tetap jalan dengan 0 skill invokable)")
 

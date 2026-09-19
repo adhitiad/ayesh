@@ -12,15 +12,26 @@ from datetime import datetime
 from pathlib import Path
 
 TABLES = [
-    "sessions", "routing_keywords", "session_memory", "logs", "feedback",
-    "tool_failures", "routing_learnings", "preferensi", "proyek",
-    "scheduled_jobs", "background_tasks", "pending_approvals",
-    "audit_log", "request_stats",
+    "sessions",
+    "routing_keywords",
+    "session_memory",
+    "logs",
+    "feedback",
+    "tool_failures",
+    "routing_learnings",
+    "preferensi",
+    "proyek",
+    "scheduled_jobs",
+    "background_tasks",
+    "pending_approvals",
+    "audit_log",
+    "request_stats",
 ]
 
 
 def _conn():
-    from core.db import connect
+    from src.core.db import connect
+
     return connect()
 
 
@@ -34,8 +45,12 @@ def dump_all() -> dict:
             cols = [d[0] for d in cur.description]
             rows = []
             for r in cur.fetchall():
-                rows.append({c: (v.isoformat() if hasattr(v, "isoformat") else v)
-                             for c, v in zip(cols, r)})
+                rows.append(
+                    {
+                        c: (v.isoformat() if hasattr(v, "isoformat") else v)
+                        for c, v in zip(cols, r)
+                    }
+                )
             out["tables"][table] = {"columns": cols, "rows": rows}
         except Exception as e:
             out["tables"][table] = {"error": str(e)[:200], "rows": []}
@@ -69,13 +84,18 @@ def restore_from(path: str) -> dict:
             for row in tdata["rows"]:
                 vals = [row.get(c) for c in cols]
                 placeholders = ", ".join(["%s"] * len(cols))
-                cur.execute(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders});", vals)
+                cur.execute(
+                    f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders});",
+                    vals,
+                )
             # Kembalikan sequence bila ada kolom id SERIAL
             if "id" in cols:
                 try:
-                    cur.execute(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), COALESCE(MAX(id), 1)) FROM {table};")
+                    cur.execute(
+                        f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), COALESCE(MAX(id), 1)) FROM {table};"
+                    )
                 except Exception:
-                    pass
+                    pass  # Non-critical: sequence reset best-effort
             stats[table] = f"{len(tdata['rows'])} rows"
         except Exception as e:
             stats[table] = f"error: {str(e)[:150]}"
@@ -85,6 +105,7 @@ def restore_from(path: str) -> dict:
 
 if __name__ == "__main__":
     import argparse
+
     p = argparse.ArgumentParser(description="Backup/restore database app")
     p.add_argument("action", choices=["backup", "restore"])
     p.add_argument("--out", default=None)

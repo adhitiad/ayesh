@@ -29,7 +29,7 @@ def check_service(name: str, check_fn) -> bool:
 
 def pg_check() -> bool:
     import psycopg2
-    from config.routing_keywords_pg import DATABASE_URL
+    from src.config.routing_keywords_pg import DATABASE_URL
     conn = psycopg2.connect(DATABASE_URL, connect_timeout=3)
     conn.close()
     return True

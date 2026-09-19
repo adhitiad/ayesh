@@ -1,0 +1,2 @@
+Folder output default untuk file lepas tanpa proyek (laporan, csv, script sekali pakai, dsb.).
+Dibuat otomatis oleh tool bila belum ada. Isi folder ini tidak di-commit (lihat .gitignore).

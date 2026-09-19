@@ -26,6 +26,7 @@ reports/
 .vscode/
 ayesh/
 
+
 # ===== Agent harness lokal =====
 .kilo/
 
@@ -56,3 +57,12 @@ setup-fr.exe
 # ===== Artefak eval & pentest (jangan commit) =====
 tests/ab_results.json
 strix_runs/
+
+# ===== Output file lepas agent (jangan commit isinya) =====
+output/*
+!output/.gitkeep
+codeql-custom-queries-python/
+.codacy/
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md

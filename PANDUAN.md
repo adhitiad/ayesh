@@ -49,11 +49,18 @@ Follow-up tanpa kata kunci tetap di agent yang sama; kata eksplisit pindah.
 "/koding buatkan script cek harga emas /riset-web harga emas" -> paralel + gabung
 ```
 
+## File Output & Lokasi Simpan
+
+- File lepas tanpa proyek (laporan, csv, script sekali pakai) otomatis disimpan di folder `output/` (dibuat otomatis bila belum ada).
+- Untuk project/kode multi-file, Ayesh **wajib tanya dulu** mau disimpan di mana — jawab mis. `F:/bdk`, maka file ditulis tepat di sana walau folder Ayesh ada di drive lain.
+- Tanya "spek laptop saya apa?" kapan saja — Ayesh tahu partisi/drive, OS, CPU, RAM (GB + keping), Python, GPU, Redis, dan PostgreSQL mesinmu.
+
 ## Batasan
 
 - Input yang tampak seperti prompt injection ditolak (400).
 - Rate limit 30 request/menit per IP.
 - Semua chat + feedback tercatat di audit log anti-rusak (`GET /audit/verify`).
+- Tulis ke luar folder proyek hanya ke lokasi yang sudah kamu sebut eksplisit; file sensitif (`.env`, `*.key/pem`) selalu ditolak.
 
 ## Kebutuhan Sistem
 

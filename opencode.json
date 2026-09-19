@@ -1,0 +1,83 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [".kilo/rules/global.md"],
+  "formatter": true,
+  "mcp": {
+    "github": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+      "environment": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    "filesystem": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "E:/"
+      ],
+      "environment": {}
+    },
+    "memory": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-memory"],
+      "environment": {}
+    },
+    "sequential-thinking": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "time": {
+      "type": "local",
+      "command": ["npx", "-y", "mcp-server-time"],
+      "environment": {}
+    },
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "Bearer ${CONTEXT7_API_KEY}"
+      }
+    },
+    // "better-auth": {
+    //   "type": "remote",
+    //   "url": "https://mcp.better-auth.com/mcp",
+    //   "headers": {}
+    // },
+    "agent-platform-mcp": {
+      "type": "remote",
+      "url": "https://aiplatform.googleapis.com/mcp/generate",
+      "headers": {}
+    },
+    "google-maps-platform-code-assist": {
+      "type": "local",
+      "command": ["npx", "-y", "@googlemaps/code-assist-mcp@0.2.0"],
+      "environment": {}
+    },
+    "exa": {
+      "type": "remote",
+      "url": "https://mcp.exa.ai/mcp",
+      "headers": {
+        "EXA_API_KEY": "Bearer ${EXA_API_KEY}"
+      }
+    },
+    "tavily": {
+      "type": "remote",
+      "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}",
+      "headers": {}
+    },
+    "firecrawl": {
+      "type": "remote",
+      "url": "https://mcp.firecrawl.dev/v2/mcp",
+      "headers": {
+        "FIRECRAWL_API_KEY": "Bearer ${FIRECRAWL_API_KEY}"
+      }
+    }
+  }
+}

@@ -1,0 +1,79 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  bandit:
+    name: Bandit SAST
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install bandit[toml]
+      - run: bandit -r plugins/ core/ mcp_core/ integrations/ api_server.py main.py -f json -o bandit-report.json --severity-level medium || true
+      - run: bandit -r plugins/ core/ mcp_core/ integrations/ api_server.py main.py --severity-level medium
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-report
+          path: bandit-report.json
+
+  pip-audit:
+    name: Pip Audit (Dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pip-audit
+      - run: pip-audit -r requirements-lock.txt --desc on
+
+  tests:
+    name: Security Regression Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: ayesh_test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: ayesh_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -p "test_*.py" -v
+        env:
+          DATABASE_URL: postgres://ayesh_test:test@localhost:5432/ayesh_test
+          REDIS_URL: redis://localhost:6379/0
+          NVIDIA_API_KEY: test-placeholder

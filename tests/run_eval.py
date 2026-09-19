@@ -75,7 +75,7 @@ def run_case(case: dict, delay: float, judge: bool = False) -> dict:
                 time.sleep(delay)
             result = route_request(turn, sid)
             # Normalisasi: answer harus string (LangGraph bisa kembalikan list)
-            from core.text import extract_text
+            from src.core.text import extract_text
             if isinstance(result.get("answer"), list):
                 result["answer"] = extract_text(result["answer"])
             out["process_times"].append(result.get("process_time"))

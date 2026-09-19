@@ -17,85 +17,12 @@ from datetime import datetime, timedelta, timezone
 WIB = timezone(timedelta(hours=7))
 
 
-def _ensure_table(cur):
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS scheduled_jobs (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            prompt TEXT NOT NULL,
-            interval_detik INTEGER NULL,
-            daily_at TEXT NULL,
-            session_id TEXT NOT NULL,
-            owner_user_id TEXT NOT NULL,
-            user_id TEXT NOT NULL DEFAULT 'default',
-            allowed_tools TEXT NOT NULL DEFAULT '[]',
-            approval_policy TEXT NOT NULL DEFAULT 'deny_all',
-            enabled BOOLEAN NOT NULL DEFAULT TRUE,
-            last_run TIMESTAMPTZ NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-    """)
-    # Migration: alter id column from SERIAL to TEXT if needed
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'scheduled_jobs' AND column_name = 'id'
-                AND data_type != 'text'
-            ) THEN
-                ALTER TABLE scheduled_jobs ALTER COLUMN id TYPE TEXT USING id::TEXT;
-            END IF;
-        END $$;
-    """)
-    # Migration: add owner_user_id column if missing
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'scheduled_jobs' AND column_name = 'owner_user_id'
-            ) THEN
-                ALTER TABLE scheduled_jobs ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT 'default';
-            END IF;
-        END $$;
-    """)
-    # Migration: add allowed_tools column if missing
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'scheduled_jobs' AND column_name = 'allowed_tools'
-            ) THEN
-                ALTER TABLE scheduled_jobs ADD COLUMN allowed_tools TEXT NOT NULL DEFAULT '[]';
-            END IF;
-        END $$;
-    """)
-    # Migration: add approval_policy column if missing
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'scheduled_jobs' AND column_name = 'approval_policy'
-            ) THEN
-                ALTER TABLE scheduled_jobs ADD COLUMN approval_policy TEXT NOT NULL DEFAULT 'deny_all';
-            END IF;
-        END $$;
-    """)
-    # Migration: add user_id column if missing
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'scheduled_jobs' AND column_name = 'user_id'
-            ) THEN
-                ALTER TABLE scheduled_jobs ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default';
-            END IF;
-        END $$;
-    """)
+def _ensure_table(cur=None):
+    """Ensure scheduled_jobs table exists. Accepts cursor (no-op) for backward compat."""
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import Base, ScheduledJob
+
+    Base.metadata.create_all(get_engine(), tables=[ScheduledJob.__table__])
 
 
 def _now_wib() -> datetime:
@@ -142,6 +69,14 @@ def _conn():
     return connect()
 
 
+def _SessionLocal():
+    from sqlalchemy.orm import sessionmaker
+
+    from src.core.db.db_engine import get_engine
+
+    return sessionmaker(bind=get_engine())
+
+
 def create_job(
     name: str,
     prompt: str,
@@ -157,29 +92,31 @@ def create_job(
         raise ValueError("Isi interval_detik atau daily_at.")
     if not owner_user_id:
         owner_user_id = user_id
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
+
+    _ensure_table()
+    SessionLocal = _SessionLocal()
     jid = str(uuid.uuid4())
     sid = session_id or str(uuid.uuid4())
     tools_json = json.dumps(allowed_tools or [])
-    cur.execute(
-        "INSERT INTO scheduled_jobs(id, name, prompt, interval_detik, daily_at, session_id, owner_user_id, user_id, allowed_tools, approval_policy)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (
-            jid,
-            name.strip()[:100],
-            prompt.strip()[:2000],
-            interval_detik,
-            daily_at,
-            sid,
-            owner_user_id,
-            user_id,
-            tools_json,
-            approval_policy,
-        ),
-    )
-    conn.close()
+
+    with SessionLocal() as db:
+        from src.core.db.models import ScheduledJob
+
+        job = ScheduledJob(
+            id=jid,
+            name=name.strip()[:100],
+            prompt=prompt.strip()[:2000],
+            interval_detik=interval_detik,
+            daily_at=daily_at,
+            session_id=sid,
+            owner_user_id=owner_user_id,
+            user_id=user_id,
+            allowed_tools=tools_json,
+            approval_policy=approval_policy,
+            enabled=True,
+        )
+        db.add(job)
+        db.commit()
     return {
         "id": jid,
         "name": name,
@@ -191,60 +128,70 @@ def create_job(
     }
 
 
-def list_jobs(user_id: str = "default") -> list:
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.commit()
-    cur.execute(
-        "SELECT id, name, prompt, interval_detik, daily_at, session_id, owner_user_id, user_id, allowed_tools, approval_policy, enabled, last_run FROM scheduled_jobs WHERE user_id = %s ORDER BY id;",
-        (user_id,),
-    )
-    rows = cur.fetchall()
-    conn.close()
-    return [
-        {
-            "id": r[0],
-            "name": r[1],
-            "prompt": (r[2] or "")[:200],
-            "interval_detik": r[3],
-            "daily_at": r[4],
-            "session_id": r[5],
-            "owner_user_id": r[6],
-            "user_id": r[7],
-            "allowed_tools": json.loads(r[8] or "[]"),
-            "approval_policy": r[9] or "deny_all",
-            "enabled": r[10],
-            "last_run": str(r[11]) if r[11] else None,
-        }
-        for r in rows
-    ]
+def list_jobs(user_id: str = "default", offset: int = 0, limit: int = 50) -> list:
+    _ensure_table()
+    SessionLocal = _SessionLocal()
+    with SessionLocal() as db:
+        from src.core.db.models import ScheduledJob
+
+        rows = (
+            db.query(ScheduledJob)
+            .filter(ScheduledJob.user_id == user_id)
+            .order_by(ScheduledJob.id)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "prompt": (r.prompt or "")[:200],
+                "interval_detik": r.interval_detik,
+                "daily_at": r.daily_at,
+                "session_id": r.session_id,
+                "owner_user_id": r.owner_user_id,
+                "user_id": r.user_id,
+                "allowed_tools": json.loads(r.allowed_tools or "[]"),
+                "approval_policy": r.approval_policy or "deny_all",
+                "enabled": r.enabled,
+                "last_run": str(r.last_run) if r.last_run else None,
+            }
+            for r in rows
+        ]
 
 
 def delete_job(job_id: str, owner_user_id: str = "default") -> bool:
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    cur.execute(
-        "DELETE FROM scheduled_jobs WHERE id = %s AND owner_user_id = %s;",
-        (job_id, owner_user_id),
-    )
-    n = cur.rowcount
-    conn.close()
-    return n > 0
+    _ensure_table()
+    SessionLocal = _SessionLocal()
+    with SessionLocal() as db:
+        from src.core.db.models import ScheduledJob
+
+        n = (
+            db.query(ScheduledJob)
+            .filter(ScheduledJob.id == job_id, ScheduledJob.owner_user_id == owner_user_id)
+            .delete()
+        )
+        db.commit()
+        return n > 0
 
 
 def set_enabled(job_id: str, enabled: bool, owner_user_id: str = "default") -> bool:
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    cur.execute(
-        "UPDATE scheduled_jobs SET enabled = %s WHERE id = %s AND owner_user_id = %s;",
-        (enabled, job_id, owner_user_id),
-    )
-    n = cur.rowcount
-    conn.close()
-    return n > 0
+    _ensure_table()
+    SessionLocal = _SessionLocal()
+    with SessionLocal() as db:
+        from src.core.db.models import ScheduledJob
+
+        job = (
+            db.query(ScheduledJob)
+            .filter(ScheduledJob.id == job_id, ScheduledJob.owner_user_id == owner_user_id)
+            .first()
+        )
+        if not job:
+            return False
+        job.enabled = enabled
+        db.commit()
+        return True
 
 
 def _check_capability(job: dict, tool_name: str, args: dict | None = None) -> bool:
@@ -300,9 +247,7 @@ def run_due_jobs() -> list:
             status, note = "error", str(e)[:200]
         conn2 = _conn()
         cur2 = conn2.cursor()
-        cur2.execute(
-            "UPDATE scheduled_jobs SET last_run = NOW() WHERE id = %s;", (jid,)
-        )
+        cur2.execute("UPDATE scheduled_jobs SET last_run = NOW() WHERE id = %s;", (jid,))
         conn2.close()
         out.append(
             {
@@ -327,9 +272,7 @@ def _loop(poll_detik: int = 60):
             if done:
                 import logging
 
-                logging.getLogger("scheduler").info(
-                    f"Jobs selesai: {[(d['id'], d['status']) for d in done]}"
-                )
+                logging.getLogger("scheduler").info(f"Jobs selesai: {[(d['id'], d['status']) for d in done]}")
         except Exception as _e:
             import logging
 
@@ -345,4 +288,17 @@ def start_scheduler(poll_detik: int = 60) -> bool:
     _scheduler_stop.clear()
     _scheduler_thread = threading.Thread(target=_loop, args=(poll_detik,), daemon=True)
     _scheduler_thread.start()
+    return True
+
+
+def stop_scheduler(timeout: float = 5.0) -> bool:
+    """Stop background scheduler thread gracefully. Return True bila berhasil stop."""
+    global _scheduler_thread
+    if not _scheduler_thread or not _scheduler_thread.is_alive():
+        return True
+    _scheduler_stop.set()
+    _scheduler_thread.join(timeout=timeout)
+    if _scheduler_thread.is_alive():
+        return False
+    _scheduler_thread = None
     return True

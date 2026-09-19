@@ -9,6 +9,7 @@ Gate (should_gate): jalankan_python selalu; panggil_mcp selalu;
 tulis_kode hanya bila overwrite=True.
 """
 
+import json as _json
 import os
 import time
 import uuid
@@ -120,50 +121,20 @@ def should_gate(tool_name: str, args: dict) -> bool:
     return bool(tool_name == "tulis_kode" and args.get("overwrite") is True)
 
 
-def _ensure_table(cur):
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS pending_approvals (
-            id TEXT PRIMARY KEY,
-            tool TEXT NOT NULL,
-            args TEXT NOT NULL DEFAULT '',
-            session_id TEXT NOT NULL DEFAULT '',
-            owner_user_id TEXT NOT NULL,
-            user_id TEXT NOT NULL DEFAULT 'default',
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            decided_at TIMESTAMPTZ NULL
-        );
-    """)
-    # Migration: add owner_user_id column if missing
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'pending_approvals' AND column_name = 'owner_user_id'
-            ) THEN
-                ALTER TABLE pending_approvals ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT 'default';
-            END IF;
-        END $$;
-    """)
-    # Migration: add user_id column if missing
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'pending_approvals' AND column_name = 'user_id'
-            ) THEN
-                ALTER TABLE pending_approvals ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default';
-            END IF;
-        END $$;
-    """)
+def _ensure_table(cur=None):
+    """Ensure pending_approvals table exists. Accepts cursor (no-op) for backward compat."""
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import Base, PendingApproval
+
+    Base.metadata.create_all(get_engine(), tables=[PendingApproval.__table__])
 
 
-def _conn():
-    from src.core.db.db import connect
+def _SessionLocal():
+    from sqlalchemy.orm import sessionmaker
 
-    return connect()
+    from src.core.db.db_engine import get_engine
+
+    return sessionmaker(bind=get_engine())
 
 
 def request_approval(
@@ -174,52 +145,52 @@ def request_approval(
     owner_user_id: str | None = None,
 ) -> tuple[bool, str]:
     """Minta approval, blokir hingga diputus/timeout. Return (approved, approval_id)."""
-    import json as _json
-
     if owner_user_id is None:
         owner_user_id = user_id
     timeout_s = timeout_s or approval_timeout()
     aid = str(uuid.uuid4())
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    cur.execute(
-        "INSERT INTO pending_approvals(id, tool, args, session_id, owner_user_id, user_id) VALUES (%s, %s, %s, %s, %s, %s);",
-        (
-            aid,
-            tool_name,
-            _json.dumps(args),
-            current_session.get(),
-            owner_user_id,
-            user_id,
-        ),
-    )
-    conn.close()
+
+    _ensure_table()
+    SessionLocal = _SessionLocal()
+    with SessionLocal() as db:
+        from src.core.db.models import PendingApproval
+
+        pa = PendingApproval(
+            id=aid,
+            tool=tool_name,
+            args=_json.dumps(args),
+            session_id=current_session.get(),
+            owner_user_id=owner_user_id,
+            user_id=user_id,
+            status="pending",
+        )
+        db.add(pa)
+        db.commit()
+
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         time.sleep(5)
-        conn2 = _conn()
-        cur2 = conn2.cursor()
-        cur2.execute("SELECT status FROM pending_approvals WHERE id = %s;", (aid,))
-        row = cur2.fetchone()
-        conn2.close()
-        if row and row[0] == "approved":
-            return True, aid
-        if row and row[0] == "denied":
-            return False, aid
-    conn3 = _conn()
-    cur3 = conn3.cursor()
-    cur3.execute(
-        "UPDATE pending_approvals SET status='expired', decided_at=NOW() WHERE id=%s AND status='pending';",
-        (aid,),
-    )
-    conn3.close()
+        with SessionLocal() as db:
+            from src.core.db.models import PendingApproval
+
+            pa = db.query(PendingApproval).filter(PendingApproval.id == aid).first()
+            if pa and pa.status == "approved":
+                return True, aid
+            if pa and pa.status == "denied":
+                return False, aid
+
+    with SessionLocal() as db:
+        from src.core.db.models import PendingApproval
+
+        pa = db.query(PendingApproval).filter(PendingApproval.id == aid, PendingApproval.status == "pending").first()
+        if pa:
+            pa.status = "expired"
+            pa.decided_at = db.execute(__import__("sqlalchemy").func.now()).scalar()
+            db.commit()
     return False, aid
 
 
-def ensure_approved(
-    tool_name: str, args: dict, owner_user_id: str | None = None
-) -> tuple[bool, str]:
+def ensure_approved(tool_name: str, args: dict, owner_user_id: str | None = None) -> tuple[bool, str]:
     """Gate utama dipanggil dari tool. Return (boleh_lanjut, pesan)."""
     if not approval_required():
         return True, ""
@@ -228,43 +199,51 @@ def ensure_approved(
     ok, aid = request_approval(tool_name, args, owner_user_id=owner_user_id)
     if ok:
         return True, ""
-    return False, (
-        f"Aksi {tool_name} DITOLAK/timeout (approval {aid}). "
-        "Jelaskan ke user dan tawarkan alternatif aman."
-    )
+    return False, (f"Aksi {tool_name} DITOLAK/timeout (approval {aid}). Jelaskan ke user dan tawarkan alternatif aman.")
 
 
 def list_pending(owner_user_id: str = "default") -> list:
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.commit()
-    cur.execute(
-        "SELECT id, tool, args, session_id, created_at FROM pending_approvals WHERE status='pending' AND owner_user_id = %s ORDER BY id;",
-        (owner_user_id,),
-    )
-    rows = cur.fetchall()
-    conn.close()
-    return [
-        {
-            "id": r[0],
-            "tool": r[1],
-            "args": (r[2] or "")[:500],
-            "session": r[3],
-            "created": str(r[4]),
-        }
-        for r in rows
-    ]
+    _ensure_table()
+    SessionLocal = _SessionLocal()
+    with SessionLocal() as db:
+        from src.core.db.models import PendingApproval
+
+        rows = (
+            db.query(PendingApproval)
+            .filter(PendingApproval.status == "pending", PendingApproval.owner_user_id == owner_user_id)
+            .order_by(PendingApproval.id)
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "tool": r.tool,
+                "args": (r.args or "")[:500],
+                "session": r.session_id,
+                "created": str(r.created_at),
+            }
+            for r in rows
+        ]
 
 
 def decide(aid: str, approved: bool, owner_user_id: str = "default") -> bool:
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    cur.execute(
-        "UPDATE pending_approvals SET status=%s, decided_at=NOW() WHERE id=%s AND status='pending' AND owner_user_id = %s;",
-        ("approved" if approved else "denied", aid, owner_user_id),
-    )
-    n = cur.rowcount
-    conn.close()
-    return n > 0
+    _ensure_table()
+    SessionLocal = _SessionLocal()
+    with SessionLocal() as db:
+        from src.core.db.models import PendingApproval
+
+        pa = (
+            db.query(PendingApproval)
+            .filter(
+                PendingApproval.id == aid,
+                PendingApproval.status == "pending",
+                PendingApproval.owner_user_id == owner_user_id,
+            )
+            .first()
+        )
+        if not pa:
+            return False
+        pa.status = "approved" if approved else "denied"
+        pa.decided_at = db.execute(__import__("sqlalchemy").func.now()).scalar()
+        db.commit()
+        return True

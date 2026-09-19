@@ -2,7 +2,7 @@
 
 - users: id, name, key_hash (sha256), prefix (8 char awal, untuk identifikasi),
   role (owner|admin|user), active, created_at.
-- Auth: header X-API-Key. Bila REQUIRE_API_KEY=1, /chat* wajib key valid (401).
+- Auth: header X-API-Key atau Authorization: Bearer. Bila REQUIRE_API_KEY=1, /chat* wajib key valid (401).
   Bila mati (default), key opsional — request tanpa key jalan sebagai "default".
 - Scope data: preferensi & proyek difilter per user via ContextVar current_user.
   Single-user lama otomatis jadi user "default" (kolom DEFAULT 'default').
@@ -43,70 +43,42 @@ def _hash_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
-def _ensure_table(cur):
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            key_hash TEXT NOT NULL UNIQUE,
-            prefix TEXT NOT NULL DEFAULT '',
-            role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('owner','admin','user')),
-            active BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-    """)
-    # Migration: add role column if it doesn't exist
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'users' AND column_name = 'role'
-            ) THEN
-                ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('owner','admin','user'));
-            END IF;
-        END $$;
-    """)
-    # Migration: alter id column from SERIAL to TEXT if needed
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'users' AND column_name = 'id'
-                AND data_type != 'text'
-            ) THEN
-                ALTER TABLE users ALTER COLUMN id TYPE TEXT USING id::TEXT;
-            END IF;
-        END $$;
-    """)
+def _ensure_table(cur=None):
+    """Ensure users table exists. Accepts cursor (no-op) for backward compat."""
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import Base, User
 
-
-def _conn():
-    from src.core.db.db import connect
-
-    return connect()
+    Base.metadata.create_all(get_engine(), tables=[User.__table__])
 
 
 def create_user(name: str, role: str = "user") -> dict:
     """Buat user, return {id, name, api_key (plaintext, tampil SEKALI), prefix, role}."""
+    from sqlalchemy.orm import sessionmaker
+
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import User
+
     name = (name or "").strip()[:100] or "tanpa-nama"
     role = (role or "user").lower()
     if role not in ("owner", "admin", "user"):
         role = "user"
     api_key = f"fr_{secrets.token_hex(16)}"
     uid = str(uuid.uuid4())
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    cur.execute(
-        "INSERT INTO users(id, name, key_hash, prefix, role) VALUES (%s, %s, %s, %s, %s) RETURNING id;",
-        (uid, name, _hash_key(api_key), api_key[:11], role),
-    )
-    fetched = cur.fetchone()
-    conn.close()
+
+    SessionLocal = sessionmaker(bind=get_engine())
+    with SessionLocal() as db:
+        user = User(
+            id=uid,
+            name=name,
+            key_hash=_hash_key(api_key),
+            prefix=api_key[:11],
+            role=role,
+            active=True,
+        )
+        db.add(user)
+        db.commit()
     return {
-        "id": fetched[0] if fetched else uid,
+        "id": uid,
         "name": name,
         "api_key": api_key,
         "prefix": api_key[:11],
@@ -118,47 +90,50 @@ def verify_key(api_key: str) -> dict | None:
     """Return {id, name, role} bila key valid+aktif, else None."""
     if not api_key:
         return None
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.commit()
-    cur.execute(
-        "SELECT id, name, role FROM users WHERE key_hash = %s AND active = TRUE;",
-        (_hash_key(api_key.strip()),),
-    )
-    row = cur.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {"id": str(row[0]), "name": row[1], "role": row[2]}
+    from sqlalchemy.orm import sessionmaker
+
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import User
+
+    SessionLocal = sessionmaker(bind=get_engine())
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.key_hash == _hash_key(api_key.strip()), User.active.is_(True)).first()
+        if not user:
+            return None
+        return {"id": str(user.id), "name": user.name, "role": user.role}
 
 
 def list_users() -> list:
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.commit()
-    cur.execute("SELECT id, name, prefix, role, active FROM users ORDER BY id;")
-    rows = cur.fetchall()
-    conn.close()
-    return [{"id": r[0], "name": r[1], "prefix": r[2], "role": r[3], "active": r[4]} for r in rows]
+    from sqlalchemy.orm import sessionmaker
+
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import User
+
+    SessionLocal = sessionmaker(bind=get_engine())
+    with SessionLocal() as db:
+        users = db.query(User).order_by(User.id).all()
+        return [{"id": u.id, "name": u.name, "prefix": u.prefix, "role": u.role, "active": u.active} for u in users]
 
 
 def deactivate_user(uid: str) -> bool:
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    cur.execute("UPDATE users SET active = FALSE WHERE id = %s;", (uid,))
-    n = cur.rowcount
-    conn.close()
-    return n > 0
+    from sqlalchemy.orm import sessionmaker
+
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import User
+
+    SessionLocal = sessionmaker(bind=get_engine())
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == uid).first()
+        if not user:
+            return False
+        user.active = False
+        db.commit()
+        return True
 
 
 def bind_request_user(request) -> str:
     """Baca X-API-Key atau Authorization: Bearer, set ContextVar, return user_id. Raise 401 bila wajib & invalid."""
     import os
-
-    from fastapi import HTTPException
 
     # Support both X-API-Key and Authorization: Bearer
     key = (request.headers.get("X-API-Key") or "").strip()
@@ -223,20 +198,18 @@ def require_owner_only(request: Request) -> str:
 
 
 def bootstrap_owner() -> dict | None:
-    """Create initial owner user if no owner exists. Returns user dict or None.
+    """Create initial owner user if no owner exists. Returns user dict or None."""
+    from sqlalchemy.orm import sessionmaker
 
-    Bootstrap mechanism: only works when the users table is empty.
-    The owner key is printed to stdout for the operator to save.
-    """
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.commit()
-    cur.execute("SELECT COUNT(*) FROM users WHERE role = 'owner' AND active = TRUE;")
-    count = cur.fetchone()[0]
-    conn.close()
-    if count > 0:
-        return None
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import User
+
+    _ensure_table()
+    SessionLocal = sessionmaker(bind=get_engine())
+    with SessionLocal() as db:
+        count = db.query(User).filter(User.role == "owner", User.active.is_(True)).count()
+        if count > 0:
+            return None
     return create_user("bootstrap-owner", "owner")
 
 

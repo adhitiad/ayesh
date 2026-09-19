@@ -6,8 +6,11 @@ Tabel: request_stats. Tak pernah gagalkan request (try/except di semua tulis).
 """
 
 import functools
+import logging
 import time
 from contextvars import ContextVar
+
+logger = logging.getLogger(__name__)
 
 _last_usage: ContextVar[dict | None] = ContextVar("llm_usage", default=None)
 
@@ -36,9 +39,7 @@ def note_usage(response) -> None:
                 }
             )
     except Exception as _e:
-        import logging
-
-        logging.getLogger(__name__).debug("note_usage error: %s", _e)
+        logger.debug("note_usage error: %s", _e)
 
 
 def pop_usage() -> dict:
@@ -47,53 +48,44 @@ def pop_usage() -> dict:
     return val
 
 
-def _ensure_table(cur):
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS request_stats (
-            id TEXT PRIMARY KEY,
-            ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            session_id TEXT NOT NULL DEFAULT '',
-            agent_type TEXT NOT NULL DEFAULT '',
-            tools TEXT NOT NULL DEFAULT '',
-            latency_s FLOAT NOT NULL DEFAULT 0,
-            prompt_tokens INTEGER NOT NULL DEFAULT 0,
-            completion_tokens INTEGER NOT NULL DEFAULT 0,
-            total_tokens INTEGER NOT NULL DEFAULT 0,
-            success BOOLEAN NOT NULL DEFAULT TRUE
-        );
-    """)
+def _ensure_table(cur=None):
+    """Ensure request_stats table exists. Accepts cursor (no-op) for backward compat."""
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import Base, RequestStat
+
+    Base.metadata.create_all(get_engine(), tables=[RequestStat.__table__])
 
 
-def _write_stats(
-    session_id: str, result: dict, latency: float, success: bool, usage: dict
-):
+def _SessionLocal():
+    from sqlalchemy.orm import sessionmaker
+
+    from src.core.db.db_engine import get_engine
+
+    return sessionmaker(bind=get_engine())
+
+
+def _write_stats(session_id: str, result: dict, latency: float, success: bool, usage: dict):
     try:
-        from src.core.db.db import connect
-
-        conn = connect()
-        cur = conn.cursor()
-        _ensure_table(cur)
+        _ensure_table()
+        SessionLocal = _SessionLocal()
         tools = ",".join(result.get("tools_used") or [])
-        cur.execute(
-            "INSERT INTO request_stats(session_id, agent_type, tools, latency_s,"
-            " prompt_tokens, completion_tokens, total_tokens, success)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
-            (
-                session_id,
-                result.get("agent_type", ""),
-                tools[:500],
-                round(latency, 2),
-                usage.get("prompt_tokens", 0),
-                usage.get("completion_tokens", 0),
-                usage.get("total_tokens", 0),
-                success,
-            ),
-        )
-        conn.close()
-    except Exception as _e:
-        import logging
+        with SessionLocal() as db:
+            from src.core.db.models import RequestStat
 
-        logging.getLogger(__name__).debug("_write_stats error: %s", _e)
+            stat = RequestStat(
+                session_id=session_id,
+                agent_type=result.get("agent_type", ""),
+                tools=tools[:500],
+                latency_s=round(latency, 2),
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                total_tokens=usage.get("total_tokens", 0),
+                success=success,
+            )
+            db.add(stat)
+            db.commit()
+    except Exception as _e:
+        logger.debug("_write_stats error: %s", _e)
 
 
 def record_usage(fn):
@@ -121,34 +113,55 @@ def record_usage(fn):
 
 def summarize_usage(hours: int = 24) -> dict:
     """Agregat untuk GET /usage/summary."""
-    from src.core.db.db import connect
+    from sqlalchemy import func, text
+    from sqlalchemy.orm import sessionmaker
 
-    conn = connect()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.commit()
-    cur.execute(
-        "SELECT COUNT(*), AVG(latency_s), SUM(total_tokens), SUM(prompt_tokens), SUM(completion_tokens),"
-        " SUM(CASE WHEN success THEN 1 ELSE 0 END) FROM request_stats"
-        " WHERE ts > NOW() - (%s || ' hours')::INTERVAL;",
-        (str(hours),),
-    )
-    n, avg_lat, tot, prm, cmp_, okc = cur.fetchone()
-    cur.execute(
-        "SELECT agent_type, COUNT(*), AVG(latency_s), SUM(total_tokens) FROM request_stats"
-        " WHERE ts > NOW() - (%s || ' hours')::INTERVAL GROUP BY agent_type ORDER BY 2 DESC;",
-        (str(hours),),
-    )
-    by_agent = [
-        {
-            "agent": r[0],
-            "count": r[1],
-            "avg_latency": round(float(r[2] or 0), 2),
-            "tokens": int(r[3] or 0),
-        }
-        for r in cur.fetchall()
-    ]
-    conn.close()
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import RequestStat
+
+    _ensure_table()
+    SessionLocal = sessionmaker(bind=get_engine())
+    with SessionLocal() as db:
+        # Overall stats via raw SQL for accuracy
+        hours_interval = text(f"'{hours} hours'")
+        row = db.execute(
+            text(
+                "SELECT COUNT(*), AVG(latency_s), SUM(total_tokens), SUM(prompt_tokens), SUM(completion_tokens),"
+                " SUM(CASE WHEN success THEN 1 ELSE 0 END) FROM request_stats"
+                " WHERE ts > NOW() - :interval"
+            ),
+            {"interval": hours_interval},
+        ).fetchone()
+        n = row[0] if row else 0
+        avg_lat = row[1] if row else 0
+        tot = row[2] if row else 0
+        prm = row[3] if row else 0
+        cmp_ = row[4] if row else 0
+        okc = row[5] if row else 0
+
+        # By agent
+        agent_rows = (
+            db.query(
+                RequestStat.agent_type,
+                func.count(RequestStat.id),
+                func.avg(RequestStat.latency_s),
+                func.sum(RequestStat.total_tokens),
+            )
+            .filter(RequestStat.ts > func.now() - text(f" INTERVAL '{hours} hours'"))
+            .group_by(RequestStat.agent_type)
+            .order_by(func.count(RequestStat.id).desc())
+            .all()
+        )
+        by_agent = [
+            {
+                "agent": r[0],
+                "count": r[1],
+                "avg_latency": round(float(r[2] or 0), 2),
+                "tokens": int(r[3] or 0),
+            }
+            for r in agent_rows
+        ]
+
     return {
         "hours": hours,
         "requests": int(n or 0),

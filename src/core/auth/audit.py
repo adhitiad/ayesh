@@ -12,18 +12,12 @@ import json
 from datetime import UTC, datetime
 
 
-def _ensure_table(cur):
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS audit_log (
-            id TEXT PRIMARY KEY,
-            ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            actor TEXT NOT NULL DEFAULT '',
-            action TEXT NOT NULL,
-            details TEXT NOT NULL DEFAULT '',
-            prev_hash TEXT NOT NULL DEFAULT 'GENESIS',
-            hash TEXT NOT NULL
-        );
-    """)
+def _ensure_table(cur=None):
+    """Ensure audit_log table exists. Accepts cursor (no-op) for backward compat."""
+    from src.core.db.db_engine import get_engine
+    from src.core.db.models import AuditLog, Base
+
+    Base.metadata.create_all(get_engine(), tables=[AuditLog.__table__])
 
 
 def _canon_ts(ts) -> str:
@@ -76,8 +70,7 @@ def append_audit(action: str, actor: str = "", details: str = "") -> str:
             conn.rollback()
             # Legacy INTEGER id column — omit id, let DB auto-generate
             cur.execute(
-                "INSERT INTO audit_log(ts, actor, action, details, prev_hash, hash) "
-                "VALUES (%s, %s, %s, %s, %s, %s);",
+                "INSERT INTO audit_log(ts, actor, action, details, prev_hash, hash) VALUES (%s, %s, %s, %s, %s, %s);",
                 (ts, actor, action, details, prev_hash, h),
             )
         conn.commit()
@@ -98,8 +91,7 @@ def verify_audit_chain(limit: int = 10000) -> dict:
     _ensure_table(cur)
     conn.commit()
     cur.execute(
-        "SELECT id, ts, actor, action, details, prev_hash, hash "
-        "FROM audit_log ORDER BY id ASC LIMIT %s;",
+        "SELECT id, ts, actor, action, details, prev_hash, hash FROM audit_log ORDER BY id ASC LIMIT %s;",
         (limit,),
     )
     rows = cur.fetchall()

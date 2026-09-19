@@ -147,6 +147,7 @@ def chat(req: ChatRequest, request: Request):
             import logging
 
             logging.getLogger(__name__).debug("audit chat_log error: %s", _e)
+        result["request_id"] = request_id
         return result
     except Exception as e:
         error_msg = str(e)

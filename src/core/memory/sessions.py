@@ -7,65 +7,26 @@ from datetime import datetime
 from sqlalchemy.orm import sessionmaker
 
 from src.core.db.db_engine import get_engine
-from src.core.db.models import Session
+from src.core.db.models import Base, Session
 from src.core.observability.logger import setup_logger
 
 logger = setup_logger("sessions")
 
 
-def _ensure_table(cur):
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            owner_user_id TEXT NOT NULL,
-            user_id TEXT NOT NULL DEFAULT 'default',
-            nama TEXT,
-            context TEXT,
-            agent_type TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-    """)
-    # Migration: add owner_user_id column if missing
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'sessions' AND column_name = 'owner_user_id'
-            ) THEN
-                ALTER TABLE sessions ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT 'default';
-            END IF;
-        END $$;
-    """)
-    # Migration: add user_id column if missing
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'sessions' AND column_name = 'user_id'
-            ) THEN
-                ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default';
-            END IF;
-        END $$;
-    """)
+def _ensure_table(cur=None):
+    """Ensure sessions table exists. Accepts cursor (no-op) for backward compat."""
+    Base.metadata.create_all(get_engine(), tables=[Session.__table__])
 
 
 def _session_local():
     return sessionmaker(bind=get_engine())
 
 
-def get_or_create_session(
-    session_id: str, user_id: str = "default", owner_user_id: str | None = None
-) -> dict:
+def get_or_create_session(session_id: str, user_id: str = "default", owner_user_id: str | None = None) -> dict:
     """Ambil session dari DB, atau buat baru jika belum ada."""
     if not owner_user_id:
         owner_user_id = user_id
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.close()
+    _ensure_table()
     with _session_local()() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if sess:
@@ -106,10 +67,7 @@ def update_session(
     owner_user_id: str | None = None,
 ):
     """Update nama/context/agent_type session (hanya field non-None)."""
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.close()
+    _ensure_table()
     with _session_local()() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if sess:
@@ -138,37 +96,14 @@ def generate_session_name_context(user_input: str, answer: str) -> tuple[str, st
 User: {user_input[:500]}
 Assistant: {answer[:500]}
 
-Jawab HANYA dengan JSON:
-{{"nama": "nama session", "context": "context percakapan"}}"""
-
-        response = llm.invoke(prompt)
-        from src.core.llm.text import extract_text
-
-        content = extract_text(
-            response.content if hasattr(response, "content") else str(response)
-        )
-
-        # Kupas markdown fence bila ada (```json ... ```)
-        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
-        try:
-            data = json.loads(content)
+Output JSON: {{"nama": "...", "context": "..."}}"""
+        resp = llm.invoke(prompt)
+        text = resp.content if hasattr(resp, "content") else str(resp)
+        # Extract JSON from response
+        match = re.search(r"\{[^}]+\}", text, re.DOTALL)
+        if match:
+            data = json.loads(match.group())
             return data.get("nama", ""), data.get("context", "")
-        except (json.JSONDecodeError, AttributeError):
-            pass
-        json_match = re.search(r"\{.*\}", content, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group())
-                return data.get("nama", ""), data.get("context", "")
-            except json.JSONDecodeError:
-                pass
-        return "", ""
     except Exception as e:
-        logger.error(f"Gagal generate session name: {e}")
-        return "", ""
-
-
-def _conn():
-    from src.core.db.db import connect
-
-    return connect()
+        logger.debug("generate_session_name_context error: %s", e)
+    return "", ""

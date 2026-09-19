@@ -19,14 +19,17 @@ from src.api.routes_tasks import router as tasks_router
 from src.config.rules import SUBAGENTS  # noqa: F401
 from src.core.db.db_engine import get_engine  # noqa: F401
 from src.core.observability.observability import get_metrics, health_check  # noqa: F401
-from src.core.scheduler.scheduler import start_scheduler
+from src.core.scheduler.scheduler import start_scheduler, stop_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    scheduler_started = False
     if os.getenv("ENABLE_SCHEDULER", "0") == "1":
-        start_scheduler()
+        scheduler_started = start_scheduler()
     yield
+    if scheduler_started:
+        stop_scheduler()
 
 
 app = FastAPI(

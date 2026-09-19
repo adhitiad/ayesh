@@ -7,12 +7,12 @@ from sqlalchemy.orm import sessionmaker
 from src.config.routing_keywords_pg import get_routing_keywords
 from src.core.auth.audit import verify_audit_chain
 from src.core.auth.auth import require_admin, require_auth, require_owner
-from src.core.db.db import connect
 from src.core.db.db_engine import get_engine
-from src.core.db.models import Feedback, LogEntry, Session, SessionMemory
+from src.core.db.models import AuditLog, Feedback, LogEntry, RequestStat, Session, SessionMemory
 from src.core.observability.analytics import generate_report
 from src.core.observability.observability import get_metrics, health_check
-from src.core.observability.usage import _ensure_table, summarize_usage
+from src.core.observability.usage import summarize_usage
+from src.core.system.error_handling import generate_request_id
 
 router = APIRouter()
 
@@ -23,6 +23,7 @@ _SessionLocal = sessionmaker(bind=get_engine())
 def health():
     h = health_check()
     return {
+        "request_id": generate_request_id(),
         "postgres": {
             "status": "up" if h.postgres else "down",
             "latency_ms": round(h.db_latency_ms, 2),
@@ -36,7 +37,9 @@ def health():
 
 @router.get("/metrics")
 def metrics():
-    return get_metrics()
+    m = get_metrics()
+    m["request_id"] = generate_request_id()
+    return m
 
 
 @router.get("/analytics")
@@ -48,26 +51,19 @@ def analytics(request: Request):
 @router.get("/audit")
 def list_audit(request: Request, limit: int = 50):
     require_admin(request)
-    conn = connect()
-    cur = conn.cursor()
-    from src.core.auth.audit import _ensure_table
 
-    _ensure_table(cur)
-    conn.commit()
-    cur.execute(
-        "SELECT id, ts, actor, action, details, hash FROM audit_log ORDER BY id DESC LIMIT %s;",
-        (limit,),
-    )
-    rows = cur.fetchall()
-    conn.close()
+    _ensure_table = lambda: None  # noqa: E731
+    AuditLog.__table__.create(_SessionLocal().bind, checkfirst=True)
+    with _SessionLocal() as db:
+        rows = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(limit).all()
     return [
         {
-            "id": r[0],
-            "ts": str(r[1]),
-            "actor": r[2],
-            "action": r[3],
-            "details": (r[4] or "")[:300],
-            "hash": r[5][:16],
+            "id": r.id,
+            "ts": str(r.ts),
+            "actor": r.actor,
+            "action": r.action,
+            "details": (r.details or "")[:300],
+            "hash": r.hash[:16] if r.hash else "",
         }
         for r in rows
     ]
@@ -88,25 +84,18 @@ def usage_summary(request: Request, hours: int = 24):
 @router.get("/usage/recent")
 def usage_recent(request: Request, limit: int = 20):
     require_admin(request)
-    conn = connect()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.commit()
-    cur.execute(
-        "SELECT ts, session_id, agent_type, tools, latency_s, total_tokens, success FROM request_stats ORDER BY id DESC LIMIT %s;",
-        (limit,),
-    )
-    rows = cur.fetchall()
-    conn.close()
+
+    with _SessionLocal() as db:
+        rows = db.query(RequestStat).order_by(RequestStat.id.desc()).limit(limit).all()
     return [
         {
-            "ts": str(r[0]),
-            "session": r[1],
-            "agent": r[2],
-            "tools": r[3],
-            "latency_s": r[4],
-            "tokens": r[5],
-            "ok": r[6],
+            "ts": str(r.ts),
+            "session": r.session_id,
+            "agent": r.agent_type,
+            "tools": r.tools,
+            "latency_s": r.latency_s,
+            "tokens": r.total_tokens,
+            "ok": r.success,
         }
         for r in rows
     ]
@@ -143,39 +132,48 @@ def feedback_recent(request: Request, limit: int = 10):
 
 
 @router.get("/sessions")
-def list_sessions(request: Request, limit: int = 50):
+def list_sessions(request: Request, offset: int = 0, limit: int = 50):
     owner_user_id = require_auth(request)
+    request_id = generate_request_id()
     with _SessionLocal() as db:
         sessions = (
             db.query(Session)
             .filter(Session.owner_user_id == owner_user_id)
             .order_by(Session.created_at.desc())
-            .limit(limit)
+            .offset(offset)
+            .limit(min(limit, 100))
             .all()
         )
-    return [
-        {
-            "id": s.id,
-            "user_id": s.user_id,
-            "nama": s.nama,
-            "context": s.context,
-            "agent_type": s.agent_type,
-            "created_at": str(s.created_at),
-            "updated_at": str(s.updated_at),
-        }
-        for s in sessions
-    ]
+    return {
+        "request_id": request_id,
+        "sessions": [
+            {
+                "id": s.id,
+                "user_id": s.user_id,
+                "nama": s.nama,
+                "context": s.context,
+                "agent_type": s.agent_type,
+                "created_at": str(s.created_at),
+                "updated_at": str(s.updated_at),
+            }
+            for s in sessions
+        ],
+        "offset": offset,
+        "limit": limit,
+    }
 
 
 @router.get("/sessions/{session_id}")
 def get_session(request: Request, session_id: str):
     require_auth(request)
+    request_id = generate_request_id()
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
     if not sess:
         raise HTTPException(status_code=404, detail="Session tidak ditemukan")
     require_owner(request, sess.owner_user_id)
     return {
+        "request_id": request_id,
         "id": sess.id,
         "owner_user_id": sess.owner_user_id,
         "user_id": sess.user_id,
@@ -195,6 +193,7 @@ def update_session_info(
     context: str | None = None,
 ):
     require_auth(request)
+    request_id = generate_request_id()
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
@@ -206,12 +205,13 @@ def update_session_info(
             sess.context = context
         sess.updated_at = datetime.now(datetime.timezone.utc)
         db.commit()
-    return {"status": "ok", "session_id": session_id}
+    return {"status": "ok", "session_id": session_id, "request_id": request_id}
 
 
 @router.get("/sessions/{session_id}/chat")
-def get_session_chat(request: Request, session_id: str, limit: int = 50):
+def get_session_chat(request: Request, session_id: str, offset: int = 0, limit: int = 50):
     require_auth(request)
+    request_id = generate_request_id()
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
@@ -222,7 +222,8 @@ def get_session_chat(request: Request, session_id: str, limit: int = 50):
             db.query(SessionMemory)
             .filter(SessionMemory.session_id == session_id)
             .order_by(SessionMemory.timestamp.desc())
-            .limit(limit)
+            .offset(offset)
+            .limit(min(limit, 100))
             .all()
         )
 
@@ -231,18 +232,22 @@ def get_session_chat(request: Request, session_id: str, limit: int = 50):
         history.append({"role": msg.role, "content": msg.content, "timestamp": str(msg.timestamp)})
 
     return {
+        "request_id": request_id,
         "session_id": session_id,
         "nama": sess.nama,
         "context": sess.context,
         "agent_type": sess.agent_type,
         "total_messages": len(history),
         "messages": history,
+        "offset": offset,
+        "limit": limit,
     }
 
 
 @router.get("/memory/{session_id}")
-def get_memory(request: Request, session_id: str, limit: int = 50):
+def get_memory(request: Request, session_id: str, offset: int = 0, limit: int = 50):
     require_auth(request)
+    request_id = generate_request_id()
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
@@ -253,17 +258,24 @@ def get_memory(request: Request, session_id: str, limit: int = 50):
                 select(SessionMemory)
                 .where(SessionMemory.session_id == session_id)
                 .order_by(SessionMemory.timestamp.desc())
-                .limit(limit)
+                .offset(offset)
+                .limit(min(limit, 100))
             )
             .scalars()
             .all()
         )
-    return [{"role": r.role, "content": r.content[:200], "timestamp": str(r.timestamp)} for r in results]
+    return {
+        "request_id": request_id,
+        "messages": [{"role": r.role, "content": r.content[:200], "timestamp": str(r.timestamp)} for r in results],
+        "offset": offset,
+        "limit": limit,
+    }
 
 
 @router.delete("/memory/{session_id}")
 def clear_memory(request: Request, session_id: str):
     require_auth(request)
+    request_id = generate_request_id()
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
@@ -271,7 +283,7 @@ def clear_memory(request: Request, session_id: str):
         require_owner(request, sess.owner_user_id)
         db.execute(delete(SessionMemory).where(SessionMemory.session_id == session_id))
         db.commit()
-    return {"status": "cleared", "session_id": session_id}
+    return {"status": "cleared", "session_id": session_id, "request_id": request_id}
 
 
 @router.get("/logs")
@@ -307,5 +319,6 @@ def clear_logs(request: Request):
 @router.get("/keywords")
 def get_keywords(request: Request):
     require_admin(request)
+    request_id = generate_request_id()
     kws, default = get_routing_keywords()
-    return {"keywords": kws, "default_agent": default}
+    return {"keywords": kws, "default_agent": default, "request_id": request_id}

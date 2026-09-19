@@ -7,6 +7,7 @@ from src.core.auth.auth import require_auth
 from src.core.db.db_engine import get_engine
 from src.core.db.models import Feedback
 from src.core.memory.learning import learn_from_feedback
+from src.core.system.error_handling import generate_request_id
 
 router = APIRouter()
 
@@ -16,6 +17,7 @@ _SessionLocal = sessionmaker(bind=get_engine())
 @router.post("/feedback")
 def submit_feedback(req: FeedbackRequest, request: Request):
     require_auth(request)
+    request_id = generate_request_id()
     if not (1 <= req.rating <= 5):
         raise HTTPException(status_code=400, detail="rating harus 1-5")
     if req.corrected_agent and req.corrected_agent not in {
@@ -62,6 +64,7 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         logging.getLogger(__name__).debug("audit feedback error: %s", _e)
     return {
         "status": "ok",
+        "request_id": request_id,
         "rating": req.rating,
         "agent_type": req.agent_type,
         "learned": bool(req.corrected_agent or req.rating <= 2),

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, PrimaryKeyConstraint, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 
@@ -10,6 +10,9 @@ Base = declarative_base()
 
 def gen_uuid():
     return str(uuid.uuid4())
+
+
+# ─── Existing ORM models ────────────────────────────────────────────
 
 
 class Session(Base):
@@ -94,3 +97,107 @@ class Monologue(Base):
     role = Column(String(50), nullable=False)
     content = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
+
+
+# ─── Raw psycopg2 → ORM models ──────────────────────────────────────
+
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(String(36), primary_key=True)
+    name = Column(String(100), nullable=False)
+    key_hash = Column(String(128), nullable=False, unique=True)
+    prefix = Column(String(10), nullable=False, server_default="")
+    role = Column(String(10), nullable=False, server_default="user")
+    active = Column(Boolean, nullable=False, server_default="true")
+    created_at = Column(DateTime, nullable=False, server_default="NOW()")
+
+
+class Preferensi(Base):
+    __tablename__ = "preferensi"
+    user_id = Column(String(36), nullable=False, server_default="default")
+    key = Column(String(100), nullable=False)
+    value = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    __table_args__ = (PrimaryKeyConstraint("user_id", "key", name="preferensi_user_pkey"),)
+
+
+class Proyek(Base):
+    __tablename__ = "proyek"
+    user_id = Column(String(36), nullable=False, server_default="default")
+    nama = Column(String(100), nullable=False)
+    goal = Column(Text, nullable=False, server_default="")
+    status = Column(String(20), nullable=False, server_default="aktif")
+    catatan = Column(Text, nullable=False, server_default="")
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    __table_args__ = (PrimaryKeyConstraint("user_id", "nama", name="proyek_user_pkey"),)
+
+
+class PendingApproval(Base):
+    __tablename__ = "pending_approvals"
+    id = Column(String(36), primary_key=True)
+    tool = Column(String(100), nullable=False)
+    args = Column(Text, nullable=False, server_default="")
+    session_id = Column(String(100), nullable=False, server_default="")
+    owner_user_id = Column(String(36), nullable=False)
+    user_id = Column(String(36), nullable=False, server_default="default")
+    status = Column(String(20), nullable=False, server_default="pending")
+    created_at = Column(DateTime, nullable=False, server_default="NOW()")
+    decided_at = Column(DateTime, nullable=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    id = Column(String(36), primary_key=True)
+    ts = Column(DateTime, nullable=False, server_default="NOW()")
+    actor = Column(String(100), nullable=False, server_default="")
+    action = Column(String(50), nullable=False)
+    details = Column(Text, nullable=False, server_default="")
+    prev_hash = Column(String(64), nullable=False, server_default="GENESIS")
+    hash = Column(String(64), nullable=False)
+
+
+class ScheduledJob(Base):
+    __tablename__ = "scheduled_jobs"
+    id = Column(String(36), primary_key=True)
+    name = Column(String(100), nullable=False)
+    prompt = Column(Text, nullable=False)
+    interval_detik = Column(Integer, nullable=True)
+    daily_at = Column(String(10), nullable=True)
+    session_id = Column(String(100), nullable=False)
+    owner_user_id = Column(String(36), nullable=False)
+    user_id = Column(String(36), nullable=False, server_default="default")
+    allowed_tools = Column(Text, nullable=False, server_default="[]")
+    approval_policy = Column(String(20), nullable=False, server_default="deny_all")
+    enabled = Column(Boolean, nullable=False, server_default="true")
+    last_run = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default="NOW()")
+
+
+class BackgroundTask(Base):
+    __tablename__ = "background_tasks"
+    id = Column(String(36), primary_key=True)
+    kind = Column(String(20), nullable=False, server_default="chat")
+    status = Column(String(20), nullable=False, server_default="pending")
+    input = Column(Text, nullable=False, server_default="")
+    session_id = Column(String(100), nullable=False, server_default="")
+    owner_user_id = Column(String(36), nullable=False)
+    user_id = Column(String(36), nullable=False, server_default="default")
+    result = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default="NOW()")
+    updated_at = Column(DateTime, nullable=False, server_default="NOW()")
+
+
+class RequestStat(Base):
+    __tablename__ = "request_stats"
+    id = Column(String(36), primary_key=True)
+    ts = Column(DateTime, nullable=False, server_default="NOW()")
+    session_id = Column(String(100), nullable=False, server_default="")
+    agent_type = Column(String(50), nullable=False, server_default="")
+    tools = Column(Text, nullable=False, server_default="")
+    latency_s = Column(Float, nullable=False, server_default="0")
+    prompt_tokens = Column(Integer, nullable=False, server_default="0")
+    completion_tokens = Column(Integer, nullable=False, server_default="0")
+    total_tokens = Column(Integer, nullable=False, server_default="0")
+    success = Column(Boolean, nullable=False, server_default="true")

@@ -4,8 +4,11 @@ Middleware untuk FastAPI + helper functions untuk deteksi & blokir
 prompt injection, data exfiltration, dan roleplay bypass.
 """
 
+import base64
+import binascii
 import html
 import re
+import unicodedata
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -69,19 +72,83 @@ INJECTION_PATTERNS = [
 _COMPILED_PATTERNS = [(re.compile(p), p) for p in INJECTION_PATTERNS]
 
 
+def _normalize_text(text: str) -> str:
+    """Normalisasi Unicode NFKC untuk mendeteksi homoglyph dan encoding bypass."""
+    return unicodedata.normalize("NFKC", text)
+
+
+def _deobfuscate_text(text: str) -> str:
+    """Hapus karakter obfuscasi umum di antara huruf: i-g-n-o-r-e → ignore.
+
+    Menangani: hyphens, dots, underscores, asterisks, tildes, dll.
+    Contoh: 'i.g-n-o-r-e' → 'ignore', 'b.y.p.a.s.s' → 'bypass'
+    """
+    # Strip obfuscation chars antara huruf: a-z, 0-9 yang dipisah non-alnum
+    return re.sub(r"(?i)([a-z0-9])[\s.\-_*~`|/\\]{1,3}([a-z0-9])", r"\1\2", text)
+
+
+def _detect_encoded_suspicious(text: str) -> list[str]:
+    """Deteksi string mencurigakan yang tampak Base64 atau hex panjang."""
+    suspicious = []
+    # Deteksi Base64: string >=10 char dengan charset Base64 dan valid padding
+    b64_pattern = re.compile(r"(?:[A-Za-z0-9+/]{10,}={0,2})")
+    for match in b64_pattern.finditer(text):
+        candidate = match.group()
+        try:
+            decoded = base64.b64decode(candidate, validate=True)
+            decoded_text = decoded.decode("utf-8", errors="ignore")
+            if len(decoded) >= 4 and any(
+                word in decoded_text.lower()
+                for word in ["import", "os.", "sys.", "exec", "eval", "subprocess", "password", "secret"]
+            ):
+                suspicious.append(f"base64:{candidate[:20]}...")
+        except binascii.Error, ValueError:
+            pass
+    # Deteksi hex encoded string (>=10 chars)
+    hex_pattern = re.compile(r"(?:0x[0-9a-fA-F]{8,}|(?:[0-9a-fA-F]{2}){8,})")
+    for match in hex_pattern.finditer(text):
+        suspicious.append(f"hex:{match.group()[:20]}...")
+    # Deteksi encoded whitespace/tab chars
+    if re.search(r"(?:\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4})", text):
+        suspicious.append("encoded_escape_sequence")
+    return suspicious
+
+
 def detect_injection(text: str) -> list[tuple[str, str]]:
-    """Deteksi pola injeksi dalam teks. Return list of (matched_pattern, matched_text)."""
+    """Deteksi pola injeksi dalam teks. Return list of (matched_pattern, matched_text).
+
+    Normalisasi NFKC diterapkan sebelum regex untuk mengatasi homoglyph dan encoding bypass.
+    Deobfuscation diterapkan untuk mendeteksi word splitting (i-g-n-o-r-e → ignore).
+    """
     matches = []
+    # Normalisasi NFKC untuk mendeteksi homoglyph, full-width chars, dll.
+    normalized = _normalize_text(text)
+    # Deobfuscation: hapus karakter pemisah antara huruf
+    deobfuscated = _deobfuscate_text(normalized)
     for pattern, raw in _COMPILED_PATTERNS:
-        for match in pattern.finditer(text):
+        # Cek pada text yang sudah deobfuscated (lebih ketat)
+        for match in pattern.finditer(deobfuscated):
             matches.append((raw, match.group()))
+        # Cek juga pada original normalized (backward-compatible)
+        for match in pattern.finditer(normalized):
+            if match.group() not in [m[1] for m in matches]:
+                matches.append((raw, match.group()))
+    # Deteksi string Base64/hex mencurigakan
+    encoded = _detect_encoded_suspicious(normalized)
+    for enc in encoded:
+        matches.append(("encoded_suspicious", enc))
     return matches
 
 
 def sanitize_input(text: str, max_len: int = 10000) -> str:
-    """Sanitasi input: escape HTML, batasi panjang, hapus kontrol karakter."""
+    """Sanitasi input: escape HTML, batasi panjang, hapus kontrol karakter.
+
+    Normalisasi NFKC diterapkan untuk mengatasi homoglyph sebelum sanitasi.
+    """
     if not text:
         return ""
+    # Normalisasi NFKC untuk mengatasi homoglyph dan encoding bypass
+    text = _normalize_text(text)
     # Batasi panjang
     text = text[:max_len]
     # Hapus karakter kontrol (kecuali newline, tab)
@@ -96,12 +163,15 @@ def guard_prompt(text: str) -> tuple[bool, str]:
     if not text:
         return True, ""
 
-    # Cek panjang ekstrem
+    # Normalisasi NFKC sebelum pengecekan
+    normalized = _normalize_text(text)
+
+    # Cek panjang ekstrem (gunakan text asli untuk panjang)
     if len(text) > 50000:
         return False, "Input terlalu panjang (max 50k karakter)"
 
-    # Deteksi injeksi
-    matches = detect_injection(text)
+    # Deteksi injeksi pada text yang sudah dinormalisasi
+    matches = detect_injection(normalized)
     if matches:
         patterns = [m[0] for m in matches[:3]]  # Ambil max 3 pola
         return False, f"Terdeteksi pola injeksi: {', '.join(patterns)}"
@@ -145,9 +215,7 @@ class PromptInjectionGuardMiddleware(BaseHTTPMiddleware):
             if not safe:
                 import logging as _logging
 
-                _logging.getLogger("input_guard").warning(
-                    f"Blocked {request.url.path}: {reason}"
-                )
+                _logging.getLogger("input_guard").warning(f"Blocked {request.url.path}: {reason}")
                 return JSONResponse(
                     status_code=400,
                     content={
@@ -168,6 +236,34 @@ class PromptInjectionGuardMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
+
+
+# Pattern untuk sanitasi tool output — strip token delimiter & injection markers
+_TOOL_OUTPUT_SANITIZE_PATTERNS = [
+    re.compile(r"<\|im_start\|>.*?<\|im_end\|>", re.DOTALL),
+    re.compile(r"<\|system\|>.*?<\|endoftext\|>", re.DOTALL),
+    re.compile(r"<\|user\|>.*?<\|assistant\|>", re.DOTALL),
+    re.compile(r"\[/INST\].*?\[INST\]", re.DOTALL),
+    re.compile(r"<<SYS>>.*?<</SYS>>", re.DOTALL),
+    re.compile(r"###\s*(?:System|Instruction|Prompt|Assistant)\s*:.*", re.DOTALL),
+    re.compile(r"(?i)(?:NEW\s+INSTRUCTION|OVERRIDE|SYSTEM\s*MESSAGE)\s*:.*", re.DOTALL),
+]
+
+
+def sanitize_tool_output(text: str, max_len: int = 20000) -> str:
+    """Bersihkan output tool dari potensi indirect prompt injection.
+
+    - Strip token delimiter / instruction markers
+    - Batasi panjang
+    - Decode escape sequences mencurigakan
+    """
+    if not text:
+        return ""
+    text = _normalize_text(text)
+    for pat in _TOOL_OUTPUT_SANITIZE_PATTERNS:
+        text = pat.sub("", text)
+    text = text[:max_len]
+    return text
 
 
 # Helper untuk dipakai manual di route_request atau tools

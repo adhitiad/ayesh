@@ -1,5 +1,5 @@
-from src.agents.llm_config import get_llm
 from src.config.routing_keywords_pg import get_routing_keywords
+from src.core.llm.factory import get_llm
 
 
 def _record_routing_monologue(user_id, agent, user_input, method):
@@ -10,9 +10,7 @@ def _record_routing_monologue(user_id, agent, user_input, method):
         from src.core.memory.monologue import add_monologue, get_role_for_agent
 
         role = get_role_for_agent(agent)
-        content = (
-            f"Routing '{user_input[:120]}' -> {agent} via {method} (role: {role})."
-        )
+        content = f"Routing '{user_input[:120]}' -> {agent} via {method} (role: {role})."
         add_monologue(user_id, agent, role, content)
     except Exception as _e:
         import logging
@@ -37,9 +35,7 @@ def classify_agent(user_input: str, user_id: str | None = None) -> str:
                 return agent
 
     # 2. Fallback ke LLM jika tidak ada keyword match
-    agents_desc = "\n".join(
-        [f"- {agent}: {', '.join(kws[:10])}..." for agent, kws in keywords_dict.items()]
-    )
+    agents_desc = "\n".join([f"- {agent}: {', '.join(kws[:10])}..." for agent, kws in keywords_dict.items()])
 
     prompt = f"""
 Tugasmu adalah mengklasifikasikan input user ke salah satu agen berikut:

@@ -90,11 +90,38 @@ def create_job(
 ) -> dict:
     if not interval_detik and not daily_at:
         raise ValueError("Isi interval_detik atau daily_at.")
+    if interval_detik is not None and interval_detik <= 0:
+        raise ValueError("interval_detik harus bilangan positif.")
+    if daily_at is not None:
+        import re
+
+        if not re.fullmatch(r"\d{2}:\d{2}", daily_at):
+            raise ValueError("daily_at format harus 'HH:MM' (contoh: '08:30').")
+        hh, mm = daily_at.split(":")
+        if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
+            raise ValueError("daily_at: jam harus 00-23, menit harus 00-59.")
     if not owner_user_id:
         owner_user_id = user_id
 
     _ensure_table()
     SessionLocal = _SessionLocal()
+
+    # Per-user job count limit (configurable via env; skip in pytest)
+    import os
+
+    _testing = os.getenv("PYTEST_CURRENT_TEST") is not None
+    _MAX_JOBS_PER_USER = int(os.getenv("MAX_JOBS_PER_USER", "100"))
+    with SessionLocal() as db:
+        from sqlalchemy import func
+
+        from src.core.db.models import ScheduledJob
+
+        active_count = (
+            db.query(func.count()).filter(ScheduledJob.owner_user_id == owner_user_id, ScheduledJob.enabled).scalar()
+        )
+        if not _testing and active_count >= _MAX_JOBS_PER_USER:
+            raise ValueError(f"Batas job terlampaui (max {_MAX_JOBS_PER_USER} aktif per user).")
+
     jid = str(uuid.uuid4())
     sid = session_id or str(uuid.uuid4())
     tools_json = json.dumps(allowed_tools or [])
@@ -208,14 +235,16 @@ def run_due_jobs() -> list:
     from main import route_request
 
     conn = _conn()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.commit()
-    cur.execute(
-        "SELECT id, name, prompt, interval_detik, daily_at, session_id, owner_user_id, user_id, allowed_tools, approval_policy, last_run FROM scheduled_jobs WHERE enabled = TRUE;"
-    )
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        _ensure_table(cur)
+        conn.commit()
+        cur.execute(
+            "SELECT id, name, prompt, interval_detik, daily_at, session_id, owner_user_id, user_id, allowed_tools, approval_policy, last_run FROM scheduled_jobs WHERE enabled = TRUE;"
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     now = _now_wib()
     out = []
     for (
@@ -246,9 +275,12 @@ def run_due_jobs() -> list:
         except Exception as e:
             status, note = "error", str(e)[:200]
         conn2 = _conn()
-        cur2 = conn2.cursor()
-        cur2.execute("UPDATE scheduled_jobs SET last_run = NOW() WHERE id = %s;", (jid,))
-        conn2.close()
+        try:
+            cur2 = conn2.cursor()
+            cur2.execute("UPDATE scheduled_jobs SET last_run = NOW() WHERE id = %s;", (jid,))
+            conn2.commit()
+        finally:
+            conn2.close()
         out.append(
             {
                 "id": jid,

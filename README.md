@@ -10,14 +10,14 @@
 - **Belajar sendiri** — keyword routing baru dipelajari dari percakapan, tool yang sering gagal dikarantina otomatis + retry dengan alternatif.
 - **Multi-LLM** — `nvidia`, `groq`, `google`, `openai`, `ollama`, `anthropic`, `cohere`, `deepseek`, `moonshot`, `minimax`, `openrouter`, `grok`/`xai`, `zai`/`glm`, `meta`, + endpoint OpenAI-compatible generik. Ganti cukup via `LLM_PROVIDER` di `.env`.
 - **Akses banyak jalur** — REST API (+ SSE streaming), bot Telegram, background tasks, scheduled jobs, approval manusia (HITL) untuk aksi berbahaya.
-- **Aman** — input guard anti prompt-injection, file tools di-jail ke project, audit log hash-chain, API key per user, secret redaction di log.
+- **Aman** — input guard anti prompt-injection, file tools di-jail ke project, web tools anti-SSRF (DNS pinning + batas redirect/size), audit log hash-chain, API key per user (+ rotasi), enkripsi at-rest kolom sensitif DB (Fernet, opsional), secret redaction di log.
 
 ## Mulai cepat (5 menit)
 
 ```bash
 pip install -r requirements.txt
 cp .env.example .env   # lalu isi API key (mis. GROQ_API_KEY)
-python setup.py        # cek prasyarat + buat tabel DB
+python bootstrap.py     # cek prasyarat + install deps + buat tabel DB
 python api_server.py   # server di http://127.0.0.1:8080
 ```
 
@@ -35,7 +35,7 @@ curl -X POST http://127.0.0.1:8080/chat \
 | --- | --- |
 | `main.py` | Thin re-export layer (Redis patch + re-exports `route_request`, `get_quarantined_tools`, `learn_from_feedback`) |
 | `api_server.py` | REST API + SSE streaming |
-| `setup.py` | Bootstrap: cek prasyarat, install deps, buat tabel |
+| `bootstrap.py` | Bootstrap (pengganti `setup.py`): cek prasyarat, install deps, buat `.env`, buat tabel |
 | `src/core/routing/` | Routing engine, intent detection, skill parsing, fan-out, tool filtering, commands |
 | `src/core/auth/` | Multi-user API keys, HITL approval, audit hash-chain |
 | `src/core/observability/` | Logging, metrics, analytics, usage tracking |
@@ -54,7 +54,7 @@ curl -X POST http://127.0.0.1:8080/chat \
 | `src/config/` | Rules, routing keywords (DB-backed) |
 | `src/ops/` | Backup/restore, data retention |
 | `.ayesh/` | Skill & SOP markdown (install via `install_agents.py`) |
-| `tests/` | 298 tes (cepat) + eval end-to-end + security regression |
+| `tests/` | 454 tes (cepat) + eval end-to-end + security regression |
 
 ## Dokumentasi
 
@@ -65,7 +65,7 @@ curl -X POST http://127.0.0.1:8080/chat \
 ## Tes & Linting
 
 ```bash
-python -m unittest discover -s tests   # 298 tes cepat, wajib lolos tiap ubah prompt
+python -m unittest discover -s tests   # 454 tes cepat, wajib lolos tiap ubah prompt
 ruff check .                            # linting (config di .ruff.toml)
 python -m tests.run_eval               # end-to-end (butuh PG + Redis + LLM)
 ```

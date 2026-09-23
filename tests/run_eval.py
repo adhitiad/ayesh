@@ -64,8 +64,14 @@ def check_expect(result: dict, expect: dict) -> list[str]:
 def run_case(case: dict, delay: float, judge: bool = False) -> dict:
     run_id = uuid.uuid4().hex[:6]
     base_session = f"eval_{case['id']}_{run_id}"
-    out = {"id": case["id"], "desc": case.get("desc", ""), "status": "pass",
-           "failures": [], "process_times": [], "session_id": base_session}
+    out = {
+        "id": case["id"],
+        "desc": case.get("desc", ""),
+        "status": "pass",
+        "failures": [],
+        "process_times": [],
+        "session_id": base_session,
+    }
     try:
         result = None
         for i, turn in enumerate(case["turns"]):
@@ -76,15 +82,17 @@ def run_case(case: dict, delay: float, judge: bool = False) -> dict:
             result = route_request(turn, sid)
             # Normalisasi: answer harus string (LangGraph bisa kembalikan list)
             from src.core.llm.text import extract_text
+
             if isinstance(result.get("answer"), list):
                 result["answer"] = extract_text(result["answer"])
             out["process_times"].append(result.get("process_time"))
-        out["failures"] = check_expect(result, case.get("expect", {}))
+        out["failures"] = check_expect(result or {}, case.get("expect", {}))
         out["status"] = "pass" if not out["failures"] else "fail"
-        out["answer_head"] = (result.get("answer") or "")[:200]
+        out["answer_head"] = ((result or {}).get("answer") or "")[:200]
         if judge and out["status"] != "skipped" and result is not None:
             try:
                 from tests.judge import judge_answer
+
                 last_turn = case["turns"][-1]
                 out["judge"] = judge_answer(last_turn, result.get("answer") or "")
             except Exception as e:
@@ -105,8 +113,9 @@ def main() -> int:
     parser.add_argument("--fast-only", action="store_true")
     parser.add_argument("--case", default=None)
     parser.add_argument("--delay", type=float, default=8.0)
-    parser.add_argument("--judge", action="store_true",
-                        help="Nilai tiap jawaban dengan LLM-as-judge (+1 LLM call/kasus)")
+    parser.add_argument(
+        "--judge", action="store_true", help="Nilai tiap jawaban dengan LLM-as-judge (+1 LLM call/kasus)"
+    )
     args = parser.parse_args()
 
     cases = json.loads(CASES_FILE.read_text(encoding="utf-8"))

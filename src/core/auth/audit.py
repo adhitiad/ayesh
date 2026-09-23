@@ -35,20 +35,21 @@ def _calc_hash(prev_hash: str, ts: str, actor: str, action: str, details: str) -
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def append_audit(action: str, actor: str = "", details: str = "") -> str:
+def append_audit(action: str, actor: str = "", details: str | dict = "") -> str:
     """Tambah baris audit, return hash-nya. Idempotent terhadap tabel belum ada.
 
-    P2.5 — Concurrency-safe: uses SELECT ... FOR UPDATE to lock the chain tip
-    before inserting, ensuring atomic hash chain even with concurrent writers.
+    P2.5 — Concurrency-safe: uses SELECT ... FOR UPDATE with explicit transaction
+    to lock the chain tip before inserting, ensuring atomic hash chain.
     """
     from src.core.db.db import connect
 
-    conn = connect()
+    conn = connect(autocommit=False)
     try:
         cur = conn.cursor()
         _ensure_table(cur)
+        conn.commit()
 
-        # P2.5 — Atomic: lock the chain tip with FOR UPDATE
+        # Explicit transaction — FOR UPDATE locks held until commit/rollback
         cur.execute("SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1 FOR UPDATE;")
         row = cur.fetchone()
         prev_hash = row[0] if row else "GENESIS"
@@ -68,7 +69,10 @@ def append_audit(action: str, actor: str = "", details: str = "") -> str:
             )
         except Exception:
             conn.rollback()
-            # Legacy INTEGER id column — omit id, let DB auto-generate
+            cur.execute("SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1 FOR UPDATE;")
+            row = cur.fetchone()
+            prev_hash = row[0] if row else "GENESIS"
+            h = _calc_hash(prev_hash, ts, actor, action, details)
             cur.execute(
                 "INSERT INTO audit_log(ts, actor, action, details, prev_hash, hash) VALUES (%s, %s, %s, %s, %s, %s);",
                 (ts, actor, action, details, prev_hash, h),
@@ -87,15 +91,16 @@ def verify_audit_chain(limit: int = 10000) -> dict:
     from src.core.db.db import connect
 
     conn = connect()
-    cur = conn.cursor()
-    _ensure_table(cur)
-    conn.commit()
-    cur.execute(
-        "SELECT id, ts, actor, action, details, prev_hash, hash FROM audit_log ORDER BY id ASC LIMIT %s;",
-        (limit,),
-    )
-    rows = cur.fetchall()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        _ensure_table(cur)
+        cur.execute(
+            "SELECT id, ts, actor, action, details, prev_hash, hash FROM audit_log ORDER BY id ASC LIMIT %s;",
+            (limit,),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
     prev = "GENESIS"
     for rid, ts, actor, action, details, prev_hash, h in rows:
         if prev_hash != prev:

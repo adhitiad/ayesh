@@ -11,7 +11,7 @@ logger = setup_logger("orchestrator.fanout")
 
 def route_fanout(user_input: str, session_id: str, segments: list) -> dict:
     """Jalankan tiap segmen skill paralel (sub-session), lalu sintesis satu jawaban."""
-    from src.agents.llm_config import get_llm
+    from src.core.llm.factory import get_llm
     from src.core.llm.text import extract_text
 
     t_start = _time.time()
@@ -39,9 +39,7 @@ def route_fanout(user_input: str, session_id: str, segments: list) -> dict:
 
     parts = []
     for (skill, _), r in zip(segments, results, strict=False):
-        parts.append(
-            f"### Hasil /{skill} (oleh {r.get('agent_type')}):\n{r.get('answer', '')}"
-        )
+        parts.append(f"### Hasil /{skill} (oleh {r.get('agent_type')}):\n{r.get('answer', '')}")
     combined = "\n\n".join(parts)
 
     try:
@@ -52,9 +50,7 @@ def route_fanout(user_input: str, session_id: str, segments: list) -> dict:
             f"Permintaan user: {user_input[:800]}\n\n{combined[:6000]}"
         )
         response = llm.invoke(prompt)
-        answer = extract_text(
-            response.content if hasattr(response, "content") else str(response)
-        )
+        answer = extract_text(response.content if hasattr(response, "content") else str(response))
     except Exception as _e:
         logger.debug("Fanout response extraction error: %s", _e)
         answer = combined
@@ -72,8 +68,5 @@ def route_fanout(user_input: str, session_id: str, segments: list) -> dict:
         "session_context": None,
         "skill_invoked": "+".join(s for s, _ in segments),
         "process_time": round(_time.time() - t_start, 2),
-        "fanout": [
-            {"skill": s, "agent": r.get("agent_type")}
-            for (s, _), r in zip(segments, results, strict=False)
-        ],
+        "fanout": [{"skill": s, "agent": r.get("agent_type")} for (s, _), r in zip(segments, results, strict=False)],
     }

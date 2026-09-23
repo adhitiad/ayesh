@@ -35,6 +35,28 @@ Follow-up tanpa kata kunci tetap di agent yang sama; kata eksplisit pindah.
 - **Proyek**: pekerjaan multi-session — "simpan proyek renovasi-dapur: renovasi total, budget 50jt", lalu "catat: keramik sudah dipilih". Lihat via `lihat_proyek`.
 - Multi-user: tiap user punya API key (`POST /users {"name": "..."}`), kirim via header `X-API-Key`. Preferensi & proyek terpisah per user.
 
+## Model LLM Personal
+
+Tiap user bisa pakai model LLM berbeda (groq, google, nvidia, dll) dengan API key sendiri.
+
+### Ganti model via chat
+- `/model groq:llama-3.3-70b-versatile` — ganti model permanen (disimpan ke DB)
+- `/model google:gemini-2.0-flash --session` — ganti model untuk session ini saja (tidak disimpan)
+- `/model` — lihat model aktif saat ini
+
+### Kelola config via API
+- `POST /users/{uid}/llm-configs` — tambah config LLM baru
+- `PUT /users/{uid}/llm-configs/{id}` — update config
+- `DELETE /users/{uid}/llm-configs/{id}` — hapus config
+- `PUT /users/{uid}/llm-configs/{id}/fallback` — set fallback chain
+
+### Override skill & MCP tool
+User bisa nonaktifkan skill atau MCP tool tertentu:
+- `PUT /users/{uid}/skill-overrides` — toggle skill on/off
+- `PUT /users/{uid}/mcp-overrides` — toggle MCP tool on/off
+- `PATCH /users/{uid}/skill-overrides` — bulk update array of overrides
+- Default: semua skill/MCP aktif. Hanya perlu set `enabled: false` untuk nonaktifkan.
+
 ## Tugas Terjadwal & Approval
 
 - Jadwal: `POST /jobs {"name": "...", "prompt": "...", "interval_detik": 3600}` atau `"daily_at": "07:00"` (WIB). Aktifkan scheduler: `ENABLE_SCHEDULER=1`.
@@ -74,16 +96,16 @@ Follow-up tanpa kata kunci tetap di agent yang sama; kata eksplisit pindah.
 
 ### 2. Perangkat lunak
 - **OS:** Windows 10/11 (PowerShell 5.1) — primer. Linux (Debian/Ubuntu) didukung, langkah di bawah.
-- **Python 3.11+** (teruji 3.14.5) + `pip install -r requirements.txt` (20 paket).
+- **Python 3.11+** (teruji 3.14.5) + `pip install -r requirements.txt` (32 paket: 26 runtime + 6 untuk tes/office).
 - **PostgreSQL 15+** lokal, database `agent` (atau sesuaikan `DATABASE_URL`).
 - **Redis 7+** lokal di `6379/0` (atau sesuaikan `REDIS_URL`).
 - **Node.js + npx** — wajib untuk tools web (`cari_web`, `panggil_mcp` via `mcp-remote`).
 - **Internet** — wajib permanen (LLM, Tavily/Exa, MCP remote).
 
 ### 3. Instalasi cepat (disarankan)
-**Windows (tanpa install Python dulu pun bisa cek):** klik-ganda `setup-fr.exe` di folder proyek (atau `setup-fr.exe --check-only` via CMD). Butuh Python terinstall agar tahap install dependensi jalan; bila belum ada, exe memberi tahu.
+**Windows (tanpa install Python dulu pun bisa cek):** klik-ganda `setup-fr.exe` di folder proyek (atau `setup-fr.exe --check-only` via CMD). Butuh Python terinstall agar tahap install dependensi jalan; bila belum ada, exe memberi tahu. Sumber exe: `bootstrap.py` (PyInstaller).
 ```bash
-python setup.py
+python bootstrap.py
 ```
 **Linux:** `./setup.sh` (cek apt postgres/redis/node, venv, install, buat DB+tabel).
 Skrip mengecek prasyarat, install requirements, buatkan `.env` dari contoh bila belum ada, tes koneksi PG+Redis, buat tabel DB, lalu tampilkan kunci API yang masih kosong + langkah lanjut. Tanpa argumen = interaktif aman (tak pernah menimpa `.env` / menghapus DB). Opsi: `--check-only` (cek saja), `--yes` (non-interaktif).
@@ -98,6 +120,21 @@ Copy-Item .env.example .env   # lalu isi kunci API (bagian 5)
 # Redis: jalankan redis-server (WSL / Docker / installer Windows)
 python -c "from src.core.db.db_engine import get_engine; from src.core.db.models import Base; Base.metadata.create_all(get_engine())"
 python api_server.py
+```
+
+**Menggunakan uv (disarankan, lebih cepat dari pip):**
+```powershell
+# Install uv (satu kali): pip install uv  atau  irm https://astral.sh/uv/install.ps1 | iex
+uv sync                          # install semua deps dari uv.lock
+Copy-Item .env.example .env
+# ... langkah DB + Redis sama seperti di atas
+uv run python api_server.py      # jalankan server
+```
+
+**Menggunakan uvx (tanpa install permanen):**
+```powershell
+uvx --from "ayesh[dev]" python -m pytest   # jalankan test sekali
+uvx ruff check .                           # lint sekali
 ```
 **Linux (Debian/Ubuntu):**
 ```bash
@@ -114,14 +151,15 @@ python api_server.py
 ### 5. Kunci API (file `.env`, jangan commit)
 | Key | Status | Untuk |
 |---|---|---|
-| `GOOGLE_API_KEY` | **Disarankan** (gratis tier) | LLM utama (`gemini-3.8-flash`) |
-| `NVIDIA_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` | Alternatif | Fallback sesuai `LLM_FALLBACK_ORDER` |
+| `GROQ_API_KEY` | **Disarankan** (gratis, cepat) | LLM utama (`groq` + `LLM_MODEL`) |
+| `GOOGLE_API_KEY` / `OPENAI_API_KEY` / `NVIDIA_API_KEY` | Alternatif | Fallback sesuai `LLM_FALLBACK_ORDER` |
 | `ANTHROPIC_API_KEY` / `COHERE_API_KEY` / `DEEPSEEK_API_KEY` | Alternatif | Provider tambahan |
 | `MOONSHOT_API_KEY` / `MINIMAX_API_KEY` / `OPENROUTER_API_KEY` | Alternatif | Provider tambahan |
 | `XAI_API_KEY` / `ZAI_API_KEY` / `META_API_KEY` | Alternatif | Grok/GLM/Llama |
 | `TAVILY_API_KEY` + `EXA_API_KEY` | Wajib bila pakai riset web | `cari_web` + fallback |
 | `TELEGRAM_BOT_TOKEN` | Bila pakai bot | `python -m src.integrations.telegram` |
 | `DATABASE_URL`, `REDIS_URL` | Wajib | Koneksi PG + Redis |
+| `DB_SECRET_KEY` | Bila ingin enkripsi at-rest | Fernet key kolom sensitif DB; generate `python -m src.core.db.encryption --generate-key` |
 
 ### 6. Konfigurasi penting (`.env`)
 | Var | Default | Efek |
@@ -129,11 +167,14 @@ python api_server.py
 | `REQUIRE_API_KEY` | `1` | Tanpa header `X-API-Key` valid → 401. Buat key: `POST /users` |
 | `API_HOST` / `API_PORT` | `127.0.0.1` / `8080` | Ganti host `0.0.0.0` bila perlu akses LAN |
 | `REQUIRE_APPROVAL` | `0` | `1` = tool berbahaya minta approve |
+| `APPROVAL_TIMEOUT_S` | `600` | Kedaluwarsa approval yang belum dijawab |
 | `ENABLE_SCHEDULER` | `0` | `1` = job terjadwal jalan |
 | `GOOGLE_NATIVE_TOOLS` | kosong | `google_search,code_execution,url_context` |
 | `PROMPT_VARIANT` | `full` | `no-sop` / `minimal` (A/B testing) |
-| `TELEGRAM_ALLOWED_IDS` | kosong (=terbuka) | Batasi chat ID bila diisi |
+| `TELEGRAM_ALLOWED_IDS` | kosong (=tutup semua di production) | Wajib diisi production; kosong hanya untuk dev mode (`TELEGRAM_DEV=1`) |
 | `LLM_PROVIDER` / `LLM_MODEL` / `LLM_TEMPERATURE` | groq / llama-3.3-70b-versatile / 0.7 | Otak agen |
+| `LOG_JSON_ENABLED` / `LOG_JSON_FILE` | `1` / `logs/ayesh.jsonl` | Structured logging + request ID tracing |
+| `COST_PER_1M_PROMPT` / `_COMPLETION` | kosong | Estimasi biaya USD per request (`/usage/summary`) |
 
 ### 7. Batasan operasional
 - **Kuota LLM adalah bottleneck**, bukan spek mesin — 429 ditangani retry + fallback, tapi tetap melambat.

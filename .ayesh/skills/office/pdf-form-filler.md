@@ -37,7 +37,7 @@ office_tool("fill_pdf_form", '{"input": "form.pdf", "output": "filled.pdf", "dat
 ### Generate Kode Python
 1. Baca file PDF menggunakan `tulis_kode` atau `baca_file`
 2. Identifikasi field yang tersedia (text, checkbox, radio, dropdown, date)
-3. Generate kode Python menggunakan library `pdfrw` atau `PyPDF2`:
+3. Generate kode Python menggunakan library `PyMuPDF` (`fitz`) — library yang sama dengan `office_tool`, atau `pdfrw` untuk kasus lanjutan:
 ```python
 from pdfrw import PdfReader, PdfWriter, PageMerge
 from pdfrw.annotate import PdfDict
@@ -94,7 +94,7 @@ writer.write()
 
 ## Library yang Digunakan
 - `pdfrw` — baca/tulis PDF
-- `PyPDF2` — manipulasi PDF
+- `PyMuPDF (fitz)` — manipulasi PDF (pengganti PyPDF2 yang sudah usang)
 - `reportlab` — generate PDF baru
 
 ## Limitasi

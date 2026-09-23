@@ -1,8 +1,7 @@
-"""RAG ringan tanpa dependensi: retrieval TF-IDF-sederhana atas data + .ayesh.
+"""RAG retrieval dengan fallback vektor FAISS.
 
-Skor = jumlah token query berbeda yang muncul di chunk (stopword dibuang).
-Hanya chunk dengan skor >= ambang yang dikembalikan, jadi sapaan/obrolan
-biasa tidak menambah token sama sekali.
+Primary: similarity search FAISS + HuggingFace embeddings atas data + .ayesh.
+Fallback: TF-IDF token overlap sederhana bila vektor tidak tersedia.
 """
 
 import re
@@ -82,6 +81,9 @@ STOPWORDS = frozenset(
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 CHUNK_SIZE = 600
 
+_vector_store = None
+_embeddings = None
+
 
 def _tokens(text: str) -> set:
     return {t for t in _TOKEN_RE.findall(text.lower()) if len(t) > 2 and t not in STOPWORDS}
@@ -108,22 +110,79 @@ def load_corpus(root: Path | None = None) -> list:
         for f in sorted((root).glob(pattern)):
             try:
                 text = f.read_text(encoding="utf-8")
-            except OSError, UnicodeDecodeError:
+            except (OSError, UnicodeDecodeError):
                 continue
             rel = str(f.relative_to(root))
             corpus.extend(_chunks(text, rel))
     return corpus
 
 
+def _get_embeddings():
+    global _embeddings
+    if _embeddings is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
+        _embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    return _embeddings
+
+
+def _ensure_vector_store(root: Path | None = None):
+    global _vector_store
+    if _vector_store is not None:
+        return _vector_store
+    try:
+        from langchain.schema import Document
+        from langchain_community.vectorstores import FAISS
+        from langchain_text_splitters import CharacterTextSplitter
+
+        corpus = load_corpus(root)
+        if not corpus:
+            return None
+
+        docs = []
+        for source, chunk in corpus:
+            docs.append(Document(page_content=chunk, metadata={"source": source}))
+
+        splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        split_docs = []
+        for d in docs:
+            parts = splitter.split_text(d.page_content)
+            for p in parts:
+                split_docs.append(Document(page_content=p, metadata=d.metadata))
+
+        if not split_docs:
+            return None
+
+        _vector_store = FAISS.from_documents(split_docs, _get_embeddings())
+        return _vector_store
+    except Exception:
+        _vector_store = None
+        return None
+
+
 def retrieve(query: str, top_k: int = 3, min_overlap: int = 2, root: Path | None = None) -> list:
     """Return [(source, chunk, skor)] terbaik. Kosong bila tidak relevan."""
+    if not query.strip():
+        return []
+
+    store = _ensure_vector_store(root)
+    if store is not None:
+        try:
+            results = store.similarity_search_with_score(query, k=top_k)
+            out = []
+            for doc, score in results:
+                source = doc.metadata.get("source", "unknown")
+                out.append((source, doc.page_content, float(score)))
+            if out:
+                return out
+        except Exception:  # nosec B110
+            pass  # intentionally silent: FAISS optional, fallback to TF-IDF
+
     qtokens = _tokens(query)
     if not qtokens:
         return []
     scored = []
     for source, chunk in load_corpus(root):
         score = len(qtokens & _tokens(chunk))
-        # Bonus bila nama file/skill disebut di query
         stem = Path(source).stem.replace("-", " ").replace("_", " ")
         if stem and stem in query.lower():
             score += 2

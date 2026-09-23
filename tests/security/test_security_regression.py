@@ -282,6 +282,81 @@ class TestSSRFDNSRebinding(unittest.TestCase):
         self.assertIn("error", result.lower())
 
 
+class TestSSRFFileOps(unittest.TestCase):
+    """test_ssrf_file_ops: download_file/upload_file block SSRF vectors."""
+
+    def test_download_file_blocks_private_ip(self):
+        """download_file must block private IPs before any network request."""
+        from src.plugins.core_tools import download_file
+
+        result = download_file.invoke({"url": "http://127.0.0.1:8080/secret"})
+        self.assertIn("error", result.lower())
+
+    def test_download_file_rejects_file_scheme(self):
+        """download_file must reject file:// URLs."""
+        from src.plugins.core_tools import download_file
+
+        result = download_file.invoke({"url": "file:///etc/passwd"})
+        self.assertIn("error", result.lower())
+
+    def test_upload_file_rejects_private_ip(self):
+        """upload_file must reject private destination IPs."""
+        from src.plugins.core_tools import upload_file
+
+        result = upload_file.invoke({"filepath": "dummy.txt", "url": "http://192.168.1.1/upload", "method": "POST"})
+        self.assertIn("error", result.lower())
+
+    def test_file_ops_no_urllib_sinks(self):
+        """file_ops must not use urllib.request urlopen/urlretrieve."""
+        import inspect
+
+        from src.plugins import file_ops
+
+        source = inspect.getsource(file_ops)
+        self.assertNotIn("urlopen", source)
+        self.assertNotIn("urlretrieve", source)
+
+    def test_open_pinned_connection_https_no_server_hostname_kwarg(self):
+        """HTTPSConnection has no server_hostname param — must pre-wrap socket instead."""
+        import src.plugins.web_tools as web_tools
+
+        with (
+            patch("http.client.HTTPSConnection") as https_conn,
+            patch("ssl.create_default_context") as ctx,
+            patch("socket.create_connection") as create_sock,
+        ):
+            raw = MagicMock()
+            create_sock.return_value = raw
+            wrapped = MagicMock()
+            ctx.return_value.wrap_socket.return_value = wrapped
+            conn = web_tools._open_pinned_connection("example.com", 443, "https", "93.184.216.34", 10)
+            https_conn.assert_called_once_with("example.com", 443, timeout=10, context=ctx.return_value)
+            create_sock.assert_called_once_with(("93.184.216.34", 443), timeout=10)
+            ctx.return_value.wrap_socket.assert_called_once_with(raw, server_hostname="example.com")
+            self.assertIs(conn.sock, wrapped)
+
+    def test_http_request_redirect_without_location_returns_response(self):
+        """3xx without Location header must return (status, data), not None."""
+        from urllib.parse import urlparse
+
+        import src.plugins.file_ops as file_ops
+
+        resp = MagicMock()
+        resp.status = 302
+        resp.read.return_value = b""
+        resp.getheader.return_value = ""
+        conn = MagicMock()
+        conn.getresponse.return_value = resp
+        prepared = (urlparse("http://example.com/x"), "example.com", 80, "93.184.216.34")
+        with (
+            patch.object(file_ops, "_open_pinned_connection", return_value=conn),
+            patch.object(file_ops, "_prepare_http_request", return_value=prepared),
+        ):
+            status, data = file_ops._http_request("http://example.com/x", "GET")
+        self.assertEqual(status, 302)
+        self.assertEqual(data, b"")
+
+
 class TestMCPAllowlist(unittest.TestCase):
     """test_mcp_allowlist: MCP calls must be allowlisted per agent."""
 

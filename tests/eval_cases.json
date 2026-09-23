@@ -301,5 +301,31 @@
       "agent_type": "casual_agent",
       "answer_contains": ["Ayesh"]
     }
+  },
+  {
+    "id": "E28",
+    "desc": "Planning: buat rencana multi-langkah lalu lihat kembali",
+    "fast": false,
+    "same_session": true,
+    "turns": [
+      "buatkan rencana 3 langkah untuk migrasi database ke postgresql",
+      "tampilkan rencana itu"
+    ],
+    "expect": {
+      "tools_include": ["buat_plan", "lihat_plan"]
+    }
+  },
+  {
+    "id": "E29",
+    "desc": "Planning: jalankan satu langkah dari rencana",
+    "fast": false,
+    "same_session": true,
+    "turns": [
+      "buatkan rencana sederhana: 1. hitung 2+2 dengan python 2. laporkan hasilnya",
+      "jalankan langkah 1 dari rencana itu"
+    ],
+    "expect": {
+      "tools_include": ["jalankan_langkah"]
+    }
   }
 ]

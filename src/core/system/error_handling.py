@@ -11,10 +11,14 @@ import logging
 import traceback
 import uuid
 
+from src.core.observability.logger import _RedactSecrets, get_request_id, set_request_id
+
 logger = logging.getLogger("errors")
+logger.addFilter(_RedactSecrets())
 
 # Patterns that should NEVER appear in client responses
-_SENSITIVE_PATTERNS = (
+# (data murni untuk redaksi; B104/B108 di blok ini false positive, ditekan di baris pembuka)
+_SENSITIVE_PATTERNS = (  # nosec
     "password",
     "secret",
     "token",
@@ -48,7 +52,10 @@ _SENSITIVE_PATTERNS = (
 
 
 def generate_request_id() -> str:
-    """Generate a unique request ID (short UUID)."""
+    """Generate a unique request ID (short UUID), reuse ContextVar bila sudah ada."""
+    rid = get_request_id()
+    if rid:
+        return rid
     return uuid.uuid4().hex[:12]
 
 
@@ -86,12 +93,13 @@ def log_internal_error(
     This is the ONLY place where full exception details are logged.
     Client never sees this output.
     """
+    set_request_id(request_id or get_request_id())
     tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
     log_msg = f"[{request_id}] {context}: {exc}"
     if extra:
         log_msg += f" | extra={extra}"
     log_msg += f"\n{''.join(tb)}"
-    logger.error(log_msg)
+    logger.error(log_msg, extra={"request_id": request_id, "context": context})
 
 
 def safe_error_response(

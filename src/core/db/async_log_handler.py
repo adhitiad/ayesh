@@ -44,7 +44,7 @@ class AsyncPostgresLogHandler(logging.Handler):
                     )
                     session.add(log_entry)
                     session.commit()
-            except Exception:  # noqa: S110 — DB log write failed: drop record (non-critical)
+            except Exception:  # noqa: S110 — DB log write failed: drop record (non-critical)  # nosec B110
                 pass
             finally:
                 self._queue.task_done()

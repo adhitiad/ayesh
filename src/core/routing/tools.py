@@ -1,14 +1,20 @@
 """Tool filtering by keywords and quarantine management."""
 
+from datetime import UTC
+
 from src.core.observability.logger import setup_logger
 
 logger = setup_logger("orchestrator.tools")
 
 
 def filter_tools_by_keywords(agent_type: str, user_input: str) -> list:
-    """Filter tools berdasarkan allowed_tools per-keyword dari database."""
+    """Filter tools berdasarkan allowed_tools per-keyword dari database.
+
+    Referensi DB boleh memakai suffix `@vN` (tool versioning) — resolusi
+    dilakukan via src.mcp_core.versioning agar format lama tetap kompatibel.
+    """
     from src.config.routing_keywords_pg import get_routing_keywords_with_tools
-    from src.plugins.core_tools import AVAILABLE_PLUGINS
+    from src.mcp_core import versioning
 
     try:
         full_data, _ = get_routing_keywords_with_tools()
@@ -28,11 +34,13 @@ def filter_tools_by_keywords(agent_type: str, user_input: str) -> list:
     if not matched_tools:
         return []
 
-    tools = []
-    for tool_name in matched_tools:
-        if tool_name in AVAILABLE_PLUGINS:
-            tools.append(AVAILABLE_PLUGINS[tool_name])
-    return tools
+    from src.core.auth.auth_context import get_disabled_mcp
+
+    disabled = get_disabled_mcp()
+    if disabled:
+        matched_tools = {t for t in matched_tools if t.split("@")[0] not in disabled}
+
+    return versioning.tools_from_names(matched_tools)
 
 
 def log_tool_failure(
@@ -43,6 +51,10 @@ def log_tool_failure(
     keyword: str = "",
 ):
     """Log tool failure ke database untuk analisis learning."""
+    from src.mcp_core import versioning
+
+    # Simpan nama basis kanonik (tanpa @vN) agar agregasi karantina konsisten.
+    tool_name = versioning.normalize(tool_name)
     try:
         from sqlalchemy.orm import sessionmaker
 
@@ -71,10 +83,11 @@ def log_tool_failure(
         logger.error("Gagal log tool failure: %s", e)
 
 
-def learn_from_tool_failure(
-    tool_name: str, agent_type: str, session_id: str, user_input: str
-) -> list | None:
+def learn_from_tool_failure(tool_name: str, agent_type: str, session_id: str, user_input: str) -> list | None:
     """Jika tool gagal > 3 kali untuk keyword yang sama, coba ganti tool alternatif."""
+    from src.mcp_core import versioning
+
+    tool_name = versioning.normalize(tool_name)
     try:
         from sqlalchemy import func, select
         from sqlalchemy.orm import sessionmaker
@@ -132,7 +145,7 @@ def get_quarantined_tools(minutes: int = 15, threshold: int = 3) -> set:
 
         engine = get_engine()
         Session = sessionmaker(bind=engine)
-        since = datetime.now(datetime.timezone.utc) - timedelta(minutes=minutes)
+        since = datetime.now(UTC) - timedelta(minutes=minutes)
         with Session() as db:
             result = db.execute(
                 select(ToolFailure.tool_name, func.count())

@@ -22,6 +22,7 @@ from src.mcp_core.registry import load_mcp_context
 from src.mcp_core.skills import get_skills_block
 from src.mcp_core.tool_validator import validate_tools_for_agent
 from src.plugins.core_tools import get_preferences_block
+from src.plugins.input_guard import validate_user_input
 
 router = APIRouter()
 
@@ -32,9 +33,10 @@ async def chat_stream(req: ChatRequest, request: Request):
     session_id = req.session_id or f"api_{uuid.uuid4().hex[:8]}"
 
     async def _gen():
-        data = json.dumps({"stage": "routing", "session_id": session_id})
+        request_id = generate_request_id()
+        data = json.dumps({"stage": "routing", "session_id": session_id, "request_id": request_id})
         yield f"event: status\ndata: {data}\n\n"
-        task = asyncio.create_task(asyncio.to_thread(route_request, req.message, session_id))
+        task = asyncio.create_task(asyncio.to_thread(route_request, req.message, session_id, request_id=request_id))
         while True:
             done, _ = await asyncio.wait({task}, timeout=15)
             if done:
@@ -42,9 +44,9 @@ async def chat_stream(req: ChatRequest, request: Request):
             yield ": ping\n\n"
         try:
             result = task.result()
+            result["request_id"] = request_id
             yield f"event: done\ndata: {json.dumps(result, ensure_ascii=False)}\n\n"
         except Exception as e:
-            request_id = generate_request_id()
             log_internal_error(request_id, e, context="chat_stream")
             msg = str(e)
             code = "rate_limited" if ("429" in msg or "Too Many Requests" in msg) else "error"
@@ -59,6 +61,11 @@ async def chat_stream_tokens(req: ChatRequest, request: Request):
     require_auth(request)
     session_id = req.session_id or f"api_{uuid.uuid4().hex[:8]}"
     user_input = req.message
+
+    # Defense-in-depth: validasi input di handler (middleware sudah cover, tapi double-guard)
+    safe, _reason = validate_user_input(user_input)
+    if not safe:
+        raise HTTPException(status_code=400, detail="Input ditolak: terdeteksi pola prompt injection.")
 
     # Routing & prompt building (sync, cepat)
     agent_type = classify_agent(user_input, user_id=session_id)
@@ -100,7 +107,10 @@ async def chat_stream_tokens(req: ChatRequest, request: Request):
     validated_tools = validate_tools_for_agent(agent_type, filtered_tools)
 
     async def _gen():
-        data = json.dumps({"stage": "streaming", "agent": agent_type, "session_id": session_id})
+        request_id = generate_request_id()
+        data = json.dumps(
+            {"stage": "streaming", "agent": agent_type, "session_id": session_id, "request_id": request_id}
+        )
         yield f"event: status\ndata: {data}\n\n"
         try:
             async for token in run_agent_executor_stream(
@@ -113,10 +123,9 @@ async def chat_stream_tokens(req: ChatRequest, request: Request):
                 if token:
                     token_data = json.dumps({"token": token})
                     yield f"event: token\ndata: {token_data}\n\n"
-            done_data = json.dumps({"status": "complete"})
+            done_data = json.dumps({"status": "complete", "request_id": request_id})
             yield f"event: done\ndata: {done_data}\n\n"
         except Exception as e:
-            request_id = generate_request_id()
             log_internal_error(request_id, e, context="chat_stream_tokens")
             msg = str(e)
             code = "rate_limited" if ("429" in msg or "Too Many Requests" in msg) else "error"
@@ -132,7 +141,7 @@ def chat(req: ChatRequest, request: Request):
     session_id = req.session_id or f"api_{uuid.uuid4().hex[:8]}"
     request_id = generate_request_id()
     try:
-        result = route_request(user_input=req.message, session_id=session_id)
+        result = route_request(user_input=req.message, session_id=session_id, request_id=request_id)
         try:
             append_audit(
                 "chat",

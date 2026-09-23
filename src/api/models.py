@@ -78,6 +78,48 @@ class UserRequest(BaseModel):
             raise ValueError("description terlalu panjang (maks 500 karakter termasuk spasi)")
 
 
+class UserLLMConfigRequest(BaseModel):
+    provider: str
+    model: str
+    api_key: str | None = None
+    temperature: float | None = None
+    is_default: bool | None = False
+    is_public: bool | None = False
+    fallback_config_ids: list[str] | None = None
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.provider) > 50:
+            raise ValueError("provider terlalu panjang (maks 50 karakter)")
+        if len(self.model) > 200:
+            raise ValueError("model terlalu panjang (maks 200 karakter)")
+        if self.temperature is not None and not (0.0 <= self.temperature <= 2.0):
+            raise ValueError("temperature harus 0.0-2.0")
+
+
+class SkillOverrideRequest(BaseModel):
+    skill_name: str
+    enabled: bool
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.skill_name) > 100:
+            raise ValueError("skill_name terlalu panjang (maks 100 karakter)")
+
+
+class UserMcpOverrideRequest(BaseModel):
+    mcp_name: str
+    enabled: bool
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.mcp_name) > 100:
+            raise ValueError("mcp_name terlalu panjang (maks 100 karakter)")
+
+
 class JobRequest(BaseModel):
     name: str
     prompt: str

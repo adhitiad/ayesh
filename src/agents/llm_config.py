@@ -3,8 +3,10 @@
 import logging
 import os
 import warnings
+from typing import Any
 
 from dotenv import load_dotenv
+from pydantic import SecretStr
 
 load_dotenv()
 
@@ -28,9 +30,7 @@ LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
 
 # Urutan fallback provider (isi di .env: LLM_FALLBACK_ORDER=nvidia,groq,google,ollama)
 FALLBACK_ORDER = [
-    p.strip().lower()
-    for p in os.getenv("LLM_FALLBACK_ORDER", "nvidia,groq,google,ollama").split(",")
-    if p.strip()
+    p.strip().lower() for p in os.getenv("LLM_FALLBACK_ORDER", "nvidia,groq,google,ollama").split(",") if p.strip()
 ]
 
 # Nama native tool Gemini yang didukung (server-side, tanpa eksekusi lokal).
@@ -39,32 +39,26 @@ NATIVE_TOOLS = ("google_search", "code_execution", "url_context")
 # Provider OpenAI-compatible: (ENV_API_KEY, ENV_BASE_URL, default_base_url, default_model).
 # Model default hanya fallback bila LLM_MODEL kosong — isi LLM_MODEL di .env untuk pasti.
 _OPENAI_COMPATIBLE = {
-    "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL",
-                 "https://api.deepseek.com", "deepseek-chat"),
-    "moonshot": ("MOONSHOT_API_KEY", "MOONSHOT_BASE_URL",
-                 "https://api.moonshot.ai/v1", "kimi-k2"),
-    "minimax": ("MINIMAX_API_KEY", "MINIMAX_BASE_URL",
-                "https://api.minimax.io/v1", "MiniMax-M2"),
-    "openrouter": ("OPENROUTER_API_KEY", "OPENROUTER_BASE_URL",
-                   "https://openrouter.ai/api/v1",
-                   "meta-llama/llama-3.3-70b-instruct"),
-    "grok": ("XAI_API_KEY", "XAI_BASE_URL",
-             "https://api.x.ai/v1", "grok-4"),
-    "xai": ("XAI_API_KEY", "XAI_BASE_URL",
-            "https://api.x.ai/v1", "grok-4"),
-    "zai": ("ZAI_API_KEY", "ZAI_BASE_URL",
-            "https://api.z.ai/api/paas/v4", "glm-4.5"),
-    "glm": ("ZAI_API_KEY", "ZAI_BASE_URL",
-            "https://api.z.ai/api/paas/v4", "glm-4.5"),
-    "zhipu": ("ZAI_API_KEY", "ZAI_BASE_URL",
-              "https://api.z.ai/api/paas/v4", "glm-4.5"),
-    "meta": ("META_API_KEY", "META_BASE_URL",
-             "https://api.llama.com/v1", "Llama-4-Maverick-17B-128E-Instruct-FP8"),
+    "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "https://api.deepseek.com", "deepseek-chat"),
+    "moonshot": ("MOONSHOT_API_KEY", "MOONSHOT_BASE_URL", "https://api.moonshot.ai/v1", "kimi-k2"),
+    "minimax": ("MINIMAX_API_KEY", "MINIMAX_BASE_URL", "https://api.minimax.io/v1", "MiniMax-M2"),
+    "openrouter": (
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_BASE_URL",
+        "https://openrouter.ai/api/v1",
+        "meta-llama/llama-3.3-70b-instruct",
+    ),
+    "grok": ("XAI_API_KEY", "XAI_BASE_URL", "https://api.x.ai/v1", "grok-4"),
+    "xai": ("XAI_API_KEY", "XAI_BASE_URL", "https://api.x.ai/v1", "grok-4"),
+    "zai": ("ZAI_API_KEY", "ZAI_BASE_URL", "https://api.z.ai/api/paas/v4", "glm-4.5"),
+    "glm": ("ZAI_API_KEY", "ZAI_BASE_URL", "https://api.z.ai/api/paas/v4", "glm-4.5"),
+    "zhipu": ("ZAI_API_KEY", "ZAI_BASE_URL", "https://api.z.ai/api/paas/v4", "glm-4.5"),
+    "meta": ("META_API_KEY", "META_BASE_URL", "https://api.llama.com/v1", "Llama-4-Maverick-17B-128E-Instruct-FP8"),
 }
 
-_llm_cache = {}
+_llm_cache: dict[str, Any] = {}
 # Provider yang benar-benar aktif (hasil fallback get_llm), bukan sekadar LLM_PROVIDER.
-_active_provider = None
+_active_provider: str | None = None
 
 
 def get_active_provider():
@@ -87,9 +81,7 @@ def _init_provider(provider: str):
             if not api_key or api_key == "your_gemini_api_key_here":
                 return None
             model = LLM_MODEL or "meta/llama-3.1-8b-instruct"
-            base_url = os.getenv(
-                "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"
-            )
+            base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
             return ChatNVIDIA(
                 model=model,
                 api_key=api_key,
@@ -104,7 +96,11 @@ def _init_provider(provider: str):
             if not api_key:
                 return None
             model = LLM_MODEL or "llama-3.3-70b-versatile"
-            return ChatGroq(model=model, api_key=api_key, temperature=LLM_TEMPERATURE)
+            return ChatGroq(
+                model=model,
+                api_key=SecretStr(api_key),
+                temperature=LLM_TEMPERATURE,
+            )
 
         elif provider == "google":
             from langchain_google_genai import ChatGoogleGenerativeAI
@@ -113,9 +109,7 @@ def _init_provider(provider: str):
             if not api_key:
                 return None
             model = LLM_MODEL or "gemini-3.5-flash-lite"
-            return ChatGoogleGenerativeAI(
-                model=model, google_api_key=api_key, temperature=LLM_TEMPERATURE
-            )
+            return ChatGoogleGenerativeAI(model=model, google_api_key=api_key, temperature=LLM_TEMPERATURE)
 
         elif provider == "openai":
             from langchain_openai import ChatOpenAI
@@ -124,11 +118,11 @@ def _init_provider(provider: str):
             if not api_key:
                 return None
             model = LLM_MODEL or "gpt-4o-mini"
-            base_url = os.getenv("OPENAI_BASE_URL")
+            openai_base_url = os.getenv("OPENAI_BASE_URL")
             return ChatOpenAI(
                 model=model,
-                api_key=api_key,
-                base_url=base_url,
+                api_key=SecretStr(api_key),
+                base_url=openai_base_url,
                 temperature=LLM_TEMPERATURE,
             )
 
@@ -145,14 +139,14 @@ def _init_provider(provider: str):
             if not api_key:
                 return None
             model = LLM_MODEL or "claude-sonnet-4-5"
-            base_url = os.getenv("ANTHROPIC_BASE_URL")
-            kwargs = {
+            anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL")
+            kwargs: dict[str, Any] = {
                 "model": model,
-                "api_key": api_key,
+                "api_key": SecretStr(api_key),
                 "temperature": LLM_TEMPERATURE,
             }
-            if base_url:
-                kwargs["base_url"] = base_url
+            if anthropic_base_url:
+                kwargs["base_url"] = anthropic_base_url
             return ChatAnthropic(**kwargs)
 
         elif provider == "cohere":
@@ -162,28 +156,26 @@ def _init_provider(provider: str):
             if not api_key:
                 return None
             model = LLM_MODEL or "command-a-03-2025"
-            base_url = os.getenv("COHERE_BASE_URL")
-            kwargs = {
+            cohere_base_url = os.getenv("COHERE_BASE_URL")
+            kwargs: dict[str, Any] = {
                 "model": model,
-                "api_key": api_key,
+                "api_key": SecretStr(api_key),
                 "temperature": LLM_TEMPERATURE,
             }
-            if base_url:
-                kwargs["base_url"] = base_url
+            if cohere_base_url:
+                kwargs["base_url"] = cohere_base_url
             return ChatCohere(**kwargs)
 
         elif provider in _OPENAI_COMPATIBLE:
             from langchain_openai import ChatOpenAI
 
-            key_env, url_env, default_url, default_model = _OPENAI_COMPATIBLE[
-                provider
-            ]
+            key_env, url_env, default_url, default_model = _OPENAI_COMPATIBLE[provider]
             api_key = os.getenv(key_env)
             if not api_key:
                 return None
             return ChatOpenAI(
                 model=LLM_MODEL or default_model,
-                api_key=api_key,
+                api_key=SecretStr(api_key),
                 base_url=os.getenv(url_env) or default_url,
                 temperature=LLM_TEMPERATURE,
             )
@@ -198,13 +190,13 @@ def _init_provider(provider: str):
 
             prefix = provider.upper().replace("-", "_")
             api_key = os.getenv(f"{prefix}_API_KEY")
-            base_url = os.getenv(f"{prefix}_BASE_URL")
-            if not base_url or not LLM_MODEL:
+            generic_base_url = os.getenv(f"{prefix}_BASE_URL")
+            if not generic_base_url or not LLM_MODEL:
                 return None
             return ChatOpenAI(
                 model=LLM_MODEL,
-                api_key=api_key or "not-needed",
-                base_url=base_url,
+                api_key=SecretStr(api_key or "not-needed"),
+                base_url=generic_base_url,
                 temperature=LLM_TEMPERATURE,
             )
 
@@ -231,9 +223,7 @@ def get_llm():
             logging.getLogger("llm_config").info(f"LLM provider aktif: {provider}")
             return llm
 
-    raise RuntimeError(
-        f"Tidak ada provider LLM yang tersedia. Cek API keys untuk: {', '.join(order)}"
-    )
+    raise RuntimeError(f"Tidak ada provider LLM yang tersedia. Cek API keys untuk: {', '.join(order)}")
 
 
 def _parse_native_tool_names(raw: str, strict: bool) -> list:
@@ -249,9 +239,7 @@ def _parse_native_tool_names(raw: str, strict: bool) -> list:
             continue
         if name not in NATIVE_TOOLS:
             if strict:
-                raise ValueError(
-                    f"Native tool '{name}' tidak dikenal. Pilihan: {', '.join(NATIVE_TOOLS)}"
-                )
+                raise ValueError(f"Native tool '{name}' tidak dikenal. Pilihan: {', '.join(NATIVE_TOOLS)}")
             logging.getLogger("llm_config").warning(
                 f"Native tool '{name}' di GOOGLE_NATIVE_TOOLS tidak dikenal, dilewati."
             )
@@ -286,9 +274,7 @@ def get_native_tools(names: str | None = None):
     try:
         from google.genai import types
     except ImportError as e:
-        logging.getLogger("llm_config").warning(
-            f"google-genai tidak tersedia, native tools dimatikan: {e}"
-        )
+        logging.getLogger("llm_config").warning(f"google-genai tidak tersedia, native tools dimatikan: {e}")
         return []
 
     builders = {
@@ -311,8 +297,7 @@ def bind_native_tools(llm, names: str | None = None):
         return llm
     if not _is_google_llm(llm):
         logging.getLogger("llm_config").warning(
-            "Native tool Gemini diminta, tapi LLM aktif bukan ChatGoogleGenerativeAI; "
-            "binding dilewati."
+            "Native tool Gemini diminta, tapi LLM aktif bukan ChatGoogleGenerativeAI; binding dilewati."
         )
         return llm
     return llm.bind_tools(tools)

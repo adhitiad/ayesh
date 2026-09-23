@@ -3,14 +3,14 @@
 import asyncio
 import json
 import os
-import subprocess
+import subprocess  # nosec B404 (transport MCP stdio)
 from typing import Any
 
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 from src.core.observability.logger import setup_logger
 
@@ -44,7 +44,7 @@ class MCPClientManager:
         """Cek apakah npx tersedia di sistem."""
         try:
             npx_cmd = "npx.cmd" if os.name == "nt" else "npx"
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 (argumen statis ["npx", "--version"], shell=False)
                 [npx_cmd, "--version"],
                 capture_output=True,
                 text=True,
@@ -52,7 +52,7 @@ class MCPClientManager:
                 check=False,
             )
             return result.returncode == 0
-        except FileNotFoundError, subprocess.TimeoutExpired:
+        except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
 
     def _resolve_env_in_args(self, args: list) -> list:
@@ -124,7 +124,7 @@ class MCPClientManager:
 
     async def list_all_tools(self) -> list[dict[str, Any]]:
         """Mengambil daftar semua tools dari semua server yang terdaftar."""
-        all_tools = []
+        all_tools: list[dict[str, Any]] = []
 
         if not self._check_npx_available():
             logger.warning("npx tidak ditemukan. Remote MCP servers tidak tersedia.")
@@ -155,7 +155,11 @@ class MCPClientManager:
                             await session.initialize()
                             result = await session.list_tools()
                             for tool in result.tools:
-                                tool_data = tool.model_dump() if hasattr(tool, "model_dump") else tool
+                                tool_data = (
+                                    dict(tool.model_dump())
+                                    if hasattr(tool, "model_dump")
+                                    else {"name": getattr(tool, "name", "")}
+                                )
                                 tool_data["server"] = server_name
                                 all_tools.append(tool_data)
                             self._connected_servers[server_name] = True
@@ -171,12 +175,16 @@ class MCPClientManager:
                     )
                     # Coba Streamable HTTP dulu, fallback ke SSE
                     try:
-                        async with streamablehttp_client(url=url, headers=headers or None) as (read, write, _get_sid):  # noqa: SIM117
+                        async with streamable_http_client(url=url) as (read, write, _get_sid):  # noqa: SIM117
                             async with ClientSession(read, write) as session:
                                 await session.initialize()
                                 result = await session.list_tools()
                                 for tool in result.tools:
-                                    tool_data = tool.model_dump() if hasattr(tool, "model_dump") else tool
+                                    tool_data = (
+                                        dict(tool.model_dump())
+                                        if hasattr(tool, "model_dump")
+                                        else {"name": getattr(tool, "name", "")}
+                                    )
                                     tool_data["server"] = server_name
                                     all_tools.append(tool_data)
                                 self._connected_servers[server_name] = True
@@ -195,7 +203,11 @@ class MCPClientManager:
                                     await session.initialize()
                                     result = await session.list_tools()
                                     for tool in result.tools:
-                                        tool_data = tool.model_dump() if hasattr(tool, "model_dump") else tool
+                                        tool_data = (
+                                            dict(tool.model_dump())
+                                            if hasattr(tool, "model_dump")
+                                            else {"name": getattr(tool, "name", "")}
+                                        )
                                         tool_data["server"] = server_name
                                         all_tools.append(tool_data)
                                     self._connected_servers[server_name] = True
@@ -242,7 +254,7 @@ class MCPClientManager:
                 headers = self._resolve_env_vars(server_config.get("headers", {}))
                 try:
                     async with (
-                        streamablehttp_client(url=url, headers=headers or None) as (read, write, _get_sid),
+                        streamable_http_client(url=url) as (read, write, _get_sid),
                         ClientSession(read, write) as session,
                     ):
                         await session.initialize()

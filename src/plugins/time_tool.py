@@ -9,7 +9,7 @@ try:
 except Exception:
     try:
         locale.setlocale(locale.LC_TIME, "Indonesian_Indonesia.1252")
-    except Exception:  # noqa: S110
+    except Exception:  # noqa: S110  # nosec B110
         pass  # fallback to default
 
 WIB = timezone(timedelta(hours=7))

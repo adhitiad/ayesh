@@ -2,7 +2,7 @@
 
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import sessionmaker
 
@@ -79,14 +79,14 @@ def update_session(
                 sess.context = context
             if agent_type is not None:
                 sess.agent_type = agent_type
-            sess.updated_at = datetime.now(datetime.timezone.utc)
+            sess.updated_at = datetime.now(UTC)
             db.commit()
 
 
 def generate_session_name_context(user_input: str, answer: str) -> tuple[str, str]:
     """Gunakan LLM untuk generate nama dan context session dari percakapan."""
     try:
-        from src.agents.llm_config import get_llm
+        from src.core.llm.factory import get_llm
 
         llm = get_llm()
         prompt = f"""Berdasarkan percakapan berikut, buat:

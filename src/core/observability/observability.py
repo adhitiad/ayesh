@@ -59,8 +59,9 @@ def health_check() -> HealthStatus:
 
 
 def get_metrics() -> dict:
+    h = health_check()
     return {
-        "postgres_healthy": health_check().postgres,
-        "redis_healthy": health_check().redis,
+        "postgres_healthy": h.postgres,
+        "redis_healthy": h.redis,
         "last_query_ms": metrics.get("last_query_ms", 0),
     }

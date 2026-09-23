@@ -33,13 +33,16 @@ def _parse_skill_file(path: Path) -> dict | None:
 
 
 def list_skills() -> list[dict]:
-    """Daftar semua skill invokable: [{name, description}]."""
+    """Daftar semua skill invokable: [{name, description}]. Filter skill yang di-disable user."""
     if not SKILLS_DIR.exists():
         return []
+    from src.core.auth.auth_context import get_disabled_skills
+
+    disabled = get_disabled_skills()
     skills = []
     for path in sorted(SKILLS_DIR.rglob("*.md")):
         parsed = _parse_skill_file(path)
-        if parsed:
+        if parsed and parsed["name"].lower() not in disabled:
             skills.append({"name": parsed["name"], "description": parsed.get("description", "")})
     return skills
 
@@ -47,6 +50,11 @@ def list_skills() -> list[dict]:
 def load_skill(name: str) -> dict | None:
     """Muat satu skill by name. Return {name, description, body} atau None."""
     name = name.strip().lower()
+    from src.core.auth.auth_context import get_disabled_skills
+
+    disabled = get_disabled_skills()
+    if name in disabled:
+        return None
     for path in SKILLS_DIR.rglob("*.md") if SKILLS_DIR.exists() else []:
         parsed = _parse_skill_file(path)
         if parsed and parsed["name"].lower() == name:
@@ -55,7 +63,7 @@ def load_skill(name: str) -> dict | None:
 
 
 def get_skills_block() -> str:
-    """Blok '# Skills' untuk system prompt: skill user-invocable + trigger."""
+    """Blok '# Skills' untuk system prompt: skill user-invocable + trigger. Filter disabled."""
     skills = list_skills()
     if not skills:
         return ""

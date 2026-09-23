@@ -32,7 +32,9 @@ except ImportError:
                 tool = self.tools_by_name.get(tc["name"])
                 if tool:
                     out = tool.invoke(tc["args"])
-                    results.append({"role": "tool", "content": str(out), "tool_call_id": tc["id"]})
+                    results.append(
+                        {"role": "tool", "content": sanitize_tool_output(str(out)), "tool_call_id": tc["id"]}
+                    )
                 else:
                     results.append({"role": "tool", "content": f"Unknown tool: {tc['name']}", "tool_call_id": tc["id"]})
             return {"messages": results}
@@ -41,9 +43,10 @@ except ImportError:
             return self.invoke(state)
 
 
-from src.agents.llm_config import get_llm  # noqa: E402
+from src.core.llm.factory import get_llm, get_llm_for_user  # noqa: E402
 from src.core.observability.logger import setup_logger  # noqa: E402
 from src.memory.memory import get_memory_for_session  # noqa: E402
+from src.plugins.input_guard import sanitize_tool_output  # noqa: E402
 
 logger = setup_logger("agent_executor")
 
@@ -58,18 +61,27 @@ class AgentState(TypedDict):
 _graph_cache: dict = {}
 
 
-def _cache_key(system_prompt: str, tools: list) -> str:
+def _cache_key(system_prompt: str, tools: list, user_llm_cfg=None) -> str:
     tool_names = tuple(sorted(t.name for t in tools))
-    return f"{system_prompt}|{tool_names}"
+    # Sertakan hash user LLM config agar user berbeda dapat graph berbeda
+    user_key = ""
+    if user_llm_cfg and getattr(user_llm_cfg, "api_key", None):
+        user_key = f"|{hash(user_llm_cfg.provider)}:{hash(user_llm_cfg.model)}"
+    return f"{system_prompt}|{tool_names}{user_key}"
 
 
 def create_agent_executor(system_prompt: str, tools: list):
-    """Membuat agent executor dengan LangGraph (cached per kombinasi prompt+tools)."""
-    key = _cache_key(system_prompt, tools)
+    """Membuat agent executor dengan LangGraph (cached per kombinasi prompt+tools+user)."""
+    # Per-user LLM: pakai config user jika ada
+    from src.core.auth.auth_context import get_current_user_llm_config
+
+    user_llm_cfg = get_current_user_llm_config()
+
+    key = _cache_key(system_prompt, tools, user_llm_cfg)
     if key in _graph_cache:
         return _graph_cache[key]
 
-    llm = get_llm()
+    llm = get_llm_for_user(user_llm_cfg) if user_llm_cfg and user_llm_cfg.api_key else get_llm()
 
     llm_with_tools = llm.bind_tools(tools) if tools else llm
 
@@ -163,7 +175,7 @@ async def run_agent_executor_stream(
     if context:
         full_prompt += f"\n\nReferensi:\n{context}"
 
-    messages = [SystemMessage(content=full_prompt)]
+    messages: list[BaseMessage] = [SystemMessage(content=full_prompt)]
     messages.extend(memory.messages)
     messages.append(HumanMessage(content=user_input))
 
@@ -222,7 +234,7 @@ def run_agent_executor(
     if context:
         full_prompt += f"\n\nReferensi:\n{context}"
 
-    messages = [SystemMessage(content=full_prompt)]
+    messages: list[BaseMessage] = [SystemMessage(content=full_prompt)]
     messages.extend(memory.messages)
     messages.append(HumanMessage(content=user_input))
 

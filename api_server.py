@@ -1,3 +1,4 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -12,11 +13,14 @@ from src.api.routes_agents import create_user_endpoint  # noqa: F401
 from src.api.routes_agents import router as agents_router
 from src.api.routes_approvals import router as approvals_router
 from src.api.routes_chat import router as chat_router
+from src.api.routes_control import router as control_router
 from src.api.routes_feedback import router as feedback_router
 from src.api.routes_jobs import router as jobs_router
+from src.api.routes_marketplace import router as marketplace_router
 from src.api.routes_system import router as system_router
 from src.api.routes_tasks import router as tasks_router
 from src.config.rules import SUBAGENTS  # noqa: F401
+from src.core.auth.auth_guards import effective_auth_config
 from src.core.db.db_engine import get_engine  # noqa: F401
 from src.core.observability.observability import get_metrics, health_check  # noqa: F401
 from src.core.scheduler.scheduler import start_scheduler, stop_scheduler
@@ -24,6 +28,7 @@ from src.core.scheduler.scheduler import start_scheduler, stop_scheduler
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logging.getLogger(__name__).info("Auth effective config: %s", effective_auth_config())
     scheduler_started = False
     if os.getenv("ENABLE_SCHEDULER", "0") == "1":
         scheduler_started = start_scheduler()
@@ -100,7 +105,7 @@ def _patched_openapi():
     return schema
 
 
-app.openapi = _patched_openapi
+app.openapi = _patched_openapi  # type: ignore[method-assign]
 
 # P3.4 — CORS: explicit allowlist (never * with credentials)
 _allowed_origins = [
@@ -124,7 +129,9 @@ app.include_router(agents_router)
 app.include_router(jobs_router)
 app.include_router(tasks_router)
 app.include_router(approvals_router)
+app.include_router(marketplace_router)
 app.include_router(system_router)
+app.include_router(control_router)
 
 if __name__ == "__main__":
     import uvicorn

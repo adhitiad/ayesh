@@ -6,7 +6,6 @@ never expand. AGENT_RULES['skills'] is documentation/trigger info, NOT
 a security capability grant.
 """
 
-
 # === SINGLE AUTHORITY: Security capability per agent ===
 # This is the ONLY place that defines which tools each agent may execute.
 # AGENT_RULES['skills'] = documentation/trigger hints (NOT security boundary).
@@ -20,6 +19,9 @@ TOOL_CAPABILITIES: dict[str, set[str]] = {
         "baca_url",
         "jalankan_python",
         "panggil_mcp",
+        "ingat_fakta",
+        "lihat_fakta",
+        "cari_fakta",
         "lihat_preferensi",
         "simpan_proyek",
         "catat_proyek",
@@ -27,6 +29,12 @@ TOOL_CAPABILITIES: dict[str, set[str]] = {
         "info_sistem",
         "set_target_dir",
         "ingat_preferensi",
+        "buat_plan",
+        "lihat_plan",
+        "cari_plan",
+        "jalankan_langkah",
+        "tandai_selesai",
+        "batal_plan",
     },
     "admin_agent": {
         "cari_web",
@@ -34,16 +42,34 @@ TOOL_CAPABILITIES: dict[str, set[str]] = {
         "minta_review",
         "baca_url",
         "panggil_mcp",
+        "ingat_fakta",
+        "lihat_fakta",
+        "cari_fakta",
         "lihat_preferensi",
         "lihat_proyek",
+        "buat_plan",
+        "lihat_plan",
+        "cari_plan",
+        "jalankan_langkah",
+        "tandai_selesai",
+        "batal_plan",
     },
     "casual_agent": {
         "get_current_time",
+        "ingat_fakta",
+        "lihat_fakta",
+        "cari_fakta",
         "ingat_preferensi",
         "lihat_preferensi",
         "simpan_proyek",
         "catat_proyek",
         "lihat_proyek",
+        "buat_plan",
+        "lihat_plan",
+        "cari_plan",
+        "jalankan_langkah",
+        "tandai_selesai",
+        "batal_plan",
     },
 }
 
@@ -67,5 +93,18 @@ def validate_tools_for_agent(agent_type: str, tools: list) -> list:
 
 
 def get_agent_capabilities(agent_type: str) -> set[str]:
-    """Return the capability set for an agent (read-only)."""
+    """Return the capability set for the agent (read-only)."""
     return TOOL_CAPABILITIES.get(agent_type, set()).copy()
+
+
+def filter_tool_names_for_agent(agent_type: str, tool_names: list) -> list:
+    """Filter nama tool agar ≤ kapasitas statis agent (narrow-only).
+
+    Dipakai jalur auto-learn (output LLM) sebelum tool diinstansiasi:
+    learned tools tidak pernah boleh melebihi TOOL_CAPABILITIES agent.
+    Unknown agent → [] (fail-closed).
+    """
+    capabilities = TOOL_CAPABILITIES.get(agent_type)
+    if capabilities is None:
+        return []
+    return [name for name in tool_names if name in capabilities]

@@ -10,9 +10,13 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
+from sqlalchemy import func
+
 _executor = ThreadPoolExecutor(max_workers=4)
 _lock = threading.Lock()
 logger = logging.getLogger(__name__)
+
+_MAX_TASKS_PER_USER = 10  # Max pending+running tasks per user
 
 
 def _ensure_table(cur=None):
@@ -47,6 +51,25 @@ def submit_task(
 
     _ensure_table()
     SessionLocal = _SessionLocal()
+
+    # Per-user depth limit: tolak bila sudah terlalu banyak task aktif
+    with SessionLocal() as db:
+        from src.core.db.models import BackgroundTask
+
+        active_count = (
+            db.query(func.count())
+            .filter(
+                BackgroundTask.owner_user_id == owner_user_id,
+                BackgroundTask.status.in_(["pending", "running"]),
+            )
+            .scalar()
+        )
+        if active_count >= _MAX_TASKS_PER_USER:
+            return {
+                "task_id": "",
+                "status": "error",
+                "detail": f"Batas task terlampaui (max {_MAX_TASKS_PER_USER} aktif per user).",
+            }
     with SessionLocal() as db:
         from src.core.db.models import BackgroundTask
 

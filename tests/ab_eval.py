@@ -20,6 +20,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RESULTS_FILE = PROJECT_ROOT / "tests" / "ab_results.json"
@@ -38,7 +39,10 @@ def run_variant(variant: str, cases: list, delay: float) -> dict:
     for c in cases:
         proc = subprocess.run(
             [sys.executable, "tests/run_eval.py", "--case", c, "--delay", str(delay)],
-            cwd=PROJECT_ROOT, env=env, capture_output=True, text=True,
+            cwd=PROJECT_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
         )
         try:
             report = json.loads((PROJECT_ROOT / "tests" / "last_eval.json").read_text(encoding="utf-8"))
@@ -50,8 +54,14 @@ def run_variant(variant: str, cases: list, delay: float) -> dict:
     passed = sum(1 for r in results if r["status"] == "pass")
     failed = sum(1 for r in results if r["status"] == "fail")
     skipped = sum(1 for r in results if r["status"] == "skipped")
-    return {"variant": variant, "passed": passed, "failed": failed,
-            "skipped": skipped, "total": len(results), "cases": results}
+    return {
+        "variant": variant,
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "total": len(results),
+        "cases": results,
+    }
 
 
 def main() -> int:
@@ -65,7 +75,7 @@ def main() -> int:
     cases = [c.strip() for c in args.cases.split(",") if c.strip()]
     print(f"A/B: varian={variants} kasus={cases}")
 
-    out = {"timestamp": datetime.now(UTC).isoformat(), "variants": {}}
+    out: dict[str, Any] = {"timestamp": datetime.now(UTC).isoformat(), "variants": {}}
     for v in variants:
         print(f"\n--- varian: {v} ---")
         res = run_variant(v, cases, args.delay)

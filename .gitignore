@@ -9,6 +9,7 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.mutmut-cache
 
 # ===== Virtual Environment =====
 venv/
@@ -21,6 +22,8 @@ env/
 
 # ===== Logs & OS =====
 *.log
+*.jsonl
+/logs/
 .DS_Store
 Thumbs.db
 reports/
@@ -40,6 +43,9 @@ coverage.xml
 *.rej
 htmlcov/
 
+# ===== Marketplace: tool terpasang runtime (bukan bagian registry) =====
+/.ayesh/marketplace/installed/
+
 /faiss_index/
 data/
 test_*response*.txt
@@ -54,6 +60,10 @@ setup-fr.exe
 *.sqlite3
 *.pem
 *.key
+
+# ===== Artefak web tools / secrets terunduh (jangan commit) =====
+apiKey-*.csv
+chat_b64.txt
 
 # ===== Artefak eval & pentest (jangan commit) =====
 tests/ab_results.json
@@ -70,3 +80,6 @@ codeql-custom-queries-python/
 
 # ===== Node (MCP servers) =====
 node_modules/
+
+
+.audit_venv/

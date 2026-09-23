@@ -17,6 +17,6 @@ ignore = [
 [lint.per-file-ignores]
 "tests/*" = ["S101", "S105", "S106", "S607", "PLW1510", "PLW2901", "E402", "RUF012"]
 "ops/*" = ["S608", "S110", "DTZ005"]
+"src/mcp_core/retrieval.py" = ["S110"]
 "install_agents.py" = ["PLW2901"]
 "manage_keywords.py" = ["E402"]
-"setup.py" = ["S112"]

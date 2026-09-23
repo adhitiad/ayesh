@@ -32,6 +32,10 @@ def learn_from_feedback(
                 return
 
             keyword = user_input.lower().strip()[:50]
+            # Sanitize: remove control characters, keep only printable + whitespace
+            keyword = "".join(c for c in keyword if c.isprintable() or c.isspace()).strip()
+            if not keyword or len(keyword) < 2:
+                return
 
             ok = add_keyword_with_tools(corrected_agent, keyword, [])
             if ok:

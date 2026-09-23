@@ -8,6 +8,7 @@ from src.core.db.db_engine import get_engine
 from src.core.db.models import Feedback
 from src.core.memory.learning import learn_from_feedback
 from src.core.system.error_handling import generate_request_id
+from src.plugins.input_guard import validate_user_input
 
 router = APIRouter()
 
@@ -39,15 +40,23 @@ def submit_feedback(req: FeedbackRequest, request: Request):
         )
         db.add(fb)
         db.commit()
-    # Trigger learning dari feedback
+    # Trigger learning dari feedback — guard against prompt injection di comment
     if req.corrected_agent or req.rating <= 2:
-        learn_from_feedback(
-            session_id=req.session_id,
-            user_input=req.comment or "",
-            agent_type=req.agent_type,
-            rating=req.rating,
-            corrected_agent=req.corrected_agent,
-        )
+        safe, reason = validate_user_input(req.comment or "")
+        if not safe:
+            import logging as _logging
+
+            _logging.getLogger("feedback_guard").warning(
+                "Feedback comment blocked: %s (session=%s)", reason, req.session_id
+            )
+        else:
+            learn_from_feedback(
+                session_id=req.session_id,
+                user_input=req.comment or "",
+                agent_type=req.agent_type,
+                rating=req.rating,
+                corrected_agent=req.corrected_agent,
+            )
     try:
         append_audit(
             "feedback",

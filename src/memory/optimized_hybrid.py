@@ -179,9 +179,12 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
                     role = "assistant" if isinstance(msg, AIMessage) else "user"
                     if isinstance(msg, SystemMessage):
                         role = "system"
-                    new_mem = SessionMemory(
-                        session_id=self.session_id, role=role, content=msg.content
-                    )
+                    try:
+                        new_mem = SessionMemory(
+                            session_id=self.session_id, owner_user_id="default", role=role, content=msg.content
+                        )
+                    except TypeError:
+                        new_mem = SessionMemory(session_id=self.session_id, role=role, content=msg.content)
                     session.add(new_mem)
                 session.commit()
 
@@ -198,12 +201,11 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
         except redis.RedisError:
             pass  # Graceful degrade - PG akan handle
 
-        # Buffer message for Postgres
+        # Buffer message for Postgres; flush when interval lapsed or buffer large
         with self._lock:
             self._pending_messages.append(message)
 
-        # Flush if interval reached
-        if self._should_flush():
+        if self._should_flush() or len(self._pending_messages) >= 50:
             self._flush_to_postgres()
 
     @with_retry(max_retries=3)
@@ -214,9 +216,7 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
         except redis.RedisError:
             pass
         with SessionLocal() as session:
-            session.execute(
-                delete(SessionMemory).where(SessionMemory.session_id == self.session_id)
-            )
+            session.execute(delete(SessionMemory).where(SessionMemory.session_id == self.session_id))
             session.commit()
         self._pending_messages.clear()
 
@@ -239,18 +239,18 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
             self.redis.clear()
             for r in rows:
                 if r.role == "assistant":
-                    self.redis.add_message(AIMessage(content=r.content))
+                    self.redis.add_message(AIMessage(content=str(r.content)))
                 elif r.role == "system":
-                    self.redis.add_message(SystemMessage(content=r.content))
+                    self.redis.add_message(SystemMessage(content=str(r.content)))
                 else:
-                    self.redis.add_message(HumanMessage(content=r.content))
+                    self.redis.add_message(HumanMessage(content=str(r.content)))
         except redis.RedisError:
             pass
         with self._lock:
             self._pending_messages.clear()
         for r in rows:
             if r.role == "system" and r.content.startswith("RINGKASAN"):
-                return r.content
+                return str(r.content)
         return ""
 
     @property
@@ -271,14 +271,14 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
                 .order_by(SessionMemory.timestamp)
             )
             results = session.execute(stmt).scalars().all()
-            msgs = []
+            msgs: list[BaseMessage] = []
             for r in results:
                 if r.role == "assistant":
-                    msgs.append(AIMessage(content=r.content))
+                    msgs.append(AIMessage(content=str(r.content)))
                 elif r.role == "system":
-                    msgs.append(SystemMessage(content=r.content))
+                    msgs.append(SystemMessage(content=str(r.content)))
                 else:
-                    msgs.append(HumanMessage(content=r.content))
+                    msgs.append(HumanMessage(content=str(r.content)))
             # Sync back to Redis
             for m in msgs:
                 try:
@@ -286,3 +286,7 @@ class OptimizedHybridMemory(BaseChatMessageHistory):
                 except redis.RedisError:
                     pass
             return msgs
+
+    @messages.setter
+    def messages(self, value: list[BaseMessage]) -> None:
+        raise NotImplementedError("OptimizedHybridMemory.messages is read-only")

@@ -93,10 +93,11 @@ def target_dirs_for(session_id: str) -> set:
 
 def is_path_allowed(abs_path: str, session_id: str = "") -> bool:
     """True bila abs_path di dalam project root/output ATAU approved dir session."""
+    ap = ""
     try:
         ap = os.path.abspath(abs_path)
-    except Exception:  # noqa: S110 — is_path_allowed must never raise
-        pass
+    except Exception:
+        return False
     root = os.path.abspath(project_root())
     if ap == root or ap.startswith(root + os.sep):
         return True

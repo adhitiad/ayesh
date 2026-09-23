@@ -15,6 +15,8 @@ import time
 import uuid
 from contextvars import ContextVar
 
+from sqlalchemy import func
+
 current_session: ContextVar[str] = ContextVar("approval_session", default="")
 current_owner_user_id: ContextVar[str] = ContextVar("owner_user_id", default="")
 current_agent_type: ContextVar[str] = ContextVar("agent_type", default="")
@@ -130,11 +132,9 @@ def _ensure_table(cur=None):
 
 
 def _SessionLocal():
-    from sqlalchemy.orm import sessionmaker
+    from src.core.db.db_engine import get_session
 
-    from src.core.db.db_engine import get_engine
-
-    return sessionmaker(bind=get_engine())
+    return get_session()
 
 
 def request_approval(
@@ -185,7 +185,7 @@ def request_approval(
         pa = db.query(PendingApproval).filter(PendingApproval.id == aid, PendingApproval.status == "pending").first()
         if pa:
             pa.status = "expired"
-            pa.decided_at = db.execute(__import__("sqlalchemy").func.now()).scalar()
+            pa.decided_at = db.execute(func.now()).scalar()
             db.commit()
     return False, aid
 
@@ -226,6 +226,130 @@ def list_pending(owner_user_id: str = "default") -> list:
         ]
 
 
+def _resolve_proposal_owner(fallback_user_id: str) -> str | None:
+    """Owner pemutus untuk proposal learning global.
+
+    Proposal memengaruhi routing semua user → utamakan role=owner aktif.
+    Gagal query → None (proposal dibatalkan, fail-closed). DB valid tapi belum
+    ada owner → fallback_user_id (setup single-user sebelum bootstrap owner).
+    """
+    try:
+        from src.core.db.db_engine import get_session
+        from src.core.db.models import User
+
+        with get_session() as db:
+            owner = db.query(User).filter(User.role == "owner", User.active.is_(True)).order_by(User.created_at).first()
+            if owner is not None:
+                return str(owner.id)
+        return fallback_user_id or "default"
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning("resolve_proposal_owner gagal (proposal dibatalkan): %s", exc)
+        return None
+
+
+def propose_learning(
+    agent: str,
+    keyword: str,
+    allowed_tools: list,
+    session_id: str = "",
+    source_input: str = "",
+    fallback_owner_user_id: str | None = None,
+) -> str | None:
+    """Antre proposal keyword routing global untuk persetujuan owner (non-blocking).
+
+    TIDAK menulis routing_keywords — hanya baris pending_approvals
+    (tool='learn_keyword'); apply terjadi di decide() saat approve.
+    Return id proposal, atau None bila gagal (tanpa tulis global = aman).
+    """
+    import logging
+
+    from src.config.routing_keywords_pg import sanitize_keyword_tools
+
+    keyword = (keyword or "").strip().lower()
+    if len(keyword) < 2:
+        return None
+    sanitized = sanitize_keyword_tools(agent, allowed_tools)
+    if sanitized is None:
+        return None
+    owner = _resolve_proposal_owner(fallback_owner_user_id or current_owner_user_id.get() or session_id or "default")
+    if not owner:
+        return None
+
+    payload = {
+        "agent": agent,
+        "keyword": keyword,
+        "allowed_tools": sanitized,
+        "source": "auto_learn",
+        "input": (source_input or "")[:300],
+    }
+    aid = str(uuid.uuid4())
+    try:
+        _ensure_table()
+        SessionLocal = _SessionLocal()
+        with SessionLocal() as db:
+            from src.core.db.models import PendingApproval
+
+            pa = PendingApproval(
+                id=aid,
+                tool="learn_keyword",
+                args=_json.dumps(payload),
+                session_id=session_id or current_session.get(),
+                owner_user_id=owner,
+                user_id=session_id or "default",
+                status="pending",
+            )
+            db.add(pa)
+            db.commit()
+        return aid
+    except Exception as exc:
+        logging.getLogger(__name__).warning("propose_learning gagal (tak ada tulis global): %s", exc)
+        return None
+
+
+def _apply_learning_row(pa, actor: str) -> bool:
+    """Apply proposal learning setelah approve: re-sanitize choke-point + tulis routing."""
+    import logging
+
+    from src.config.routing_keywords_pg import (
+        add_keyword_with_tools,
+        invalidate_routing_cache,
+        sanitize_keyword_tools,
+    )
+
+    log = logging.getLogger(__name__)
+    try:
+        payload = _json.loads(pa.args or "{}")
+    except ValueError:
+        log.error("Proposal learning %s: args rusak — tidak diterapkan.", pa.id)
+        return False
+    agent = str(payload.get("agent", ""))
+    keyword = str(payload.get("keyword", "")).strip().lower()
+    if len(keyword) < 2:
+        log.error("Proposal learning %s: keyword tidak valid — tidak diterapkan.", pa.id)
+        return False
+    sanitized = sanitize_keyword_tools(agent, payload.get("allowed_tools") or [])
+    if sanitized is None:
+        log.error("Proposal learning %s: agent tidak valid — tidak diterapkan.", pa.id)
+        return False
+    if not add_keyword_with_tools(agent, keyword, sanitized):
+        log.error("Proposal learning %s: gagal tulis routing_keywords.", pa.id)
+        return False
+    invalidate_routing_cache()
+    try:
+        from src.core.auth.audit import append_audit
+
+        append_audit(
+            "approve_learning",
+            actor=actor or "api",
+            details=f"agent={agent} keyword={keyword} tools={sanitized}",
+        )
+    except Exception as exc:
+        log.exception("Proposal learning %s: audit gagal setelah apply: %s", pa.id, exc)
+    return True
+
+
 def decide(aid: str, approved: bool, owner_user_id: str = "default") -> bool:
     _ensure_table()
     SessionLocal = _SessionLocal()
@@ -243,7 +367,10 @@ def decide(aid: str, approved: bool, owner_user_id: str = "default") -> bool:
         )
         if not pa:
             return False
+        # Apply learning global hanya SETELAH approve; gagal → tetap pending.
+        if approved and pa.tool == "learn_keyword" and not _apply_learning_row(pa, owner_user_id):
+            return False
         pa.status = "approved" if approved else "denied"
-        pa.decided_at = db.execute(__import__("sqlalchemy").func.now()).scalar()
+        pa.decided_at = db.execute(func.now()).scalar()
         db.commit()
         return True

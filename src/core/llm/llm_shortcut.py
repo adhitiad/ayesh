@@ -19,9 +19,9 @@ def llm_shortcut(
     t_start: float,
 ) -> dict | None:
     """Direct LLM call when no tools needed. Returns response dict or None on failure."""
-    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-    from src.agents.llm_config import bind_native_tools, get_llm
+    from src.agents.llm_config import bind_native_tools
     from src.core.llm.text import extract_text
     from src.core.memory.sessions import (
         generate_session_name_context,
@@ -33,9 +33,19 @@ def llm_shortcut(
 
         memory = get_memory_for_session(session_id)
 
-        llm = get_llm()
+        # Per-user LLM: pakai config user jika ada
+        from src.core.auth.auth_context import get_current_user_llm_config
+        from src.core.llm.task_routing import classify_task, get_llm_for_task
+
+        user_llm_cfg = get_current_user_llm_config()
+        if user_llm_cfg and user_llm_cfg.api_key:
+            from src.core.llm.factory import get_llm_for_user
+
+            llm = get_llm_for_user(user_llm_cfg)
+        else:
+            llm = get_llm_for_task(classify_task(agent_type, user_input), agent_type, user_input)
         llm = bind_native_tools(llm)
-        messages = [SystemMessage(content=augmented_prompt)]
+        messages: list[BaseMessage] = [SystemMessage(content=augmented_prompt)]
         messages.extend(memory.messages)
         messages.append(HumanMessage(content=user_input))
 
@@ -47,9 +57,7 @@ def llm_shortcut(
         except Exception as _e:
             logger.debug("note_usage error: %s", _e)
 
-        answer = extract_text(
-            response.content if hasattr(response, "content") else str(response)
-        )
+        answer = extract_text(response.content if hasattr(response, "content") else str(response))
         elapsed = round(time.time() - t_start, 2)
 
         memory.add_user_message(user_input)

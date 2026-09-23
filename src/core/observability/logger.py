@@ -1,5 +1,20 @@
+"""Logging: redaksi secret, JSON structured logging opsional, propagasi request ID.
+
+Console berwarna (ColoredFormatter) + PostgreSQL async (AsyncPostgresLogHandler)
+tetap seperti sebelumnya. Di atasnya ditambah JSON structured logging ke file
+berotasi (logs/ayesh.jsonl default; nonaktif: LOG_JSON_ENABLED=0; jalur custom:
+LOG_JSON_FILE=<path>). Request ID + session ID disebarkan lewat ContextVar sehingga
+field request_id muncul di setiap baris JSON tanpa mengubah signature pemanggil.
+"""
+
+import json
 import logging
+import logging.handlers
+import os
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import ClassVar
 
 from src.core.db.async_log_handler import AsyncPostgresLogHandler
@@ -87,6 +102,127 @@ class ColoredFormatter(logging.Formatter):
         return formatted
 
 
+# ── Propagasi request/session ID via ContextVar ─────────────────────
+_request_id: ContextVar[str | None] = ContextVar("log_request_id", default=None)
+_session_id: ContextVar[str | None] = ContextVar("log_session_id", default=None)
+
+
+def get_request_id() -> str | None:
+    """Request ID ContextVar aktif (bila ada)."""
+    return _request_id.get()
+
+
+def set_request_id(request_id: str | None) -> None:
+    """Seed request ID untuk semua log di konteks/thread saat ini."""
+    _request_id.set(request_id or None)
+
+
+def get_session_id() -> str | None:
+    """Session ID ContextVar aktif (bila ada)."""
+    return _session_id.get()
+
+
+def set_session_id(session_id: str | None) -> None:
+    """Seed session ID untuk semua log di konteks/thread saat ini."""
+    _session_id.set(session_id or None)
+
+
+@contextmanager
+def request_log_context(request_id: str | None = None, session_id: str | None = None) -> Iterator[None]:
+    """Seed ContextVar request/session ID; dipulihkan setelah keluar (kill nested)."""
+    prev_rid, prev_sid = _request_id.get(), _session_id.get()
+    if request_id:
+        _request_id.set(request_id)
+    if session_id:
+        _session_id.set(session_id)
+    try:
+        yield
+    finally:
+        _request_id.set(prev_rid)
+        _session_id.set(prev_sid)
+
+
+# ── JSON structured logging ─────────────────────────────────────────
+class JsonFormatter(logging.Formatter):
+    """Formatter satu-baris JSON.
+
+    request_id/session_id diambil dari record.extra (bila ada) atau ContextVar
+    (propagasi global tanpa mengubah pemanggil). Seluruh baris di-redaksi ulang.
+    """
+
+    EXTRA_KEYS = (
+        "request_id",
+        "session_id",
+        "context",
+        "agent_type",
+        "user_id",
+        "scope",
+        "route",
+        "elapsed_ms",
+    )
+
+    def format(self, record: logging.LogRecord) -> str:
+        ts = self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z")
+        payload: dict = {
+            "ts": ts,
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        rid = getattr(record, "request_id", None) or _request_id.get()
+        if rid:
+            payload["request_id"] = rid
+        sid = getattr(record, "session_id", None) or _session_id.get()
+        if sid:
+            payload["session_id"] = sid
+        for key in self.EXTRA_KEYS:
+            if key in payload:
+                continue
+            value = getattr(record, key, None)
+            if value is not None:
+                payload[key] = value
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        try:
+            line = json.dumps(payload, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            fallback = {
+                "ts": ts,
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            }
+            line = json.dumps(fallback, ensure_ascii=False)
+        return redact_secrets(line)
+
+
+_JSON_HANDLER_ATTACHED = False
+_DEFAULT_LOG_FILE = os.getenv("LOG_JSON_FILE", "").strip() or "logs/ayesh.jsonl"
+
+
+def _attach_json_file_handler() -> None:
+    """Satu file handler JSON di root logger (singleton). Nonaktif: LOG_JSON_ENABLED=0."""
+    global _JSON_HANDLER_ATTACHED
+    if _JSON_HANDLER_ATTACHED:
+        return
+    _JSON_HANDLER_ATTACHED = True
+    if os.getenv("LOG_JSON_ENABLED", "1").strip() == "0":
+        return
+    try:
+        log_path = os.path.abspath(_DEFAULT_LOG_FILE)
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        handler.setFormatter(JsonFormatter())
+        handler.setLevel(logging.INFO)
+        logging.getLogger().addHandler(handler)
+    except OSError as _e:
+        import sys
+
+        print(f"[logger] JSON file handler gagal dibuat ({_DEFAULT_LOG_FILE}): {_e}", file=sys.stderr)
+
+
 def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """Buat logger dengan nama dan level tertentu.
 
@@ -101,6 +237,9 @@ def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     logger.setLevel(level)
     if not any(isinstance(f, _RedactSecrets) for f in logger.filters):
         logger.addFilter(_RedactSecrets())
+
+    # JSON structured logging (singleton di root; langsung jalan bila diaktifkan)
+    _attach_json_file_handler()
 
     # Hindari duplikasi handler
     if logger.handlers:

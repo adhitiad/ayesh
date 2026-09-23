@@ -196,6 +196,13 @@ def load_mcp_context(
     skills = agent_config.get("skills", [])
     tool_policy = agent_config.get("tool_policy", {})
 
+    # Filter disabled tools by user override
+    from src.core.auth.auth_context import get_disabled_mcp
+
+    disabled = get_disabled_mcp()
+    if disabled:
+        skills = [s for s in skills if s not in disabled]
+
     # Tools Lokal saja (plugins) — skip remote MCP untuk performa
     tools = []
     for skill in skills:

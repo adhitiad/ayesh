@@ -21,16 +21,16 @@ Terima kasih sudah mau berkontribusi! Proyek ini adalah orkestrator multi-agent 
 - **Jangan commit artefak**: `setup-fr.exe`, `dist/`, `build/`, `faiss_index/`, `tests/last_eval.json`, `tests/ab_results.json`, `strix_runs/`.
 - Jaga **keyword hygiene** routing: jangan tambah kata generik (`sekarang`, `waktu`, `jam`) sebagai keyword agent — terbukti membajak follow-up ke agent yang salah (lihat `AGENTS.md`).
 - Prompt (`config/rules.py`, `mcp_core/registry.py`, `mcp_core/skills.py`, `.ayesh/`) harus tetap memuat blok `## Identitas` Ayesh.
-- Perubahan skema DB wajib lewat **Alembic** (`alembic revision --autogenerate`), bukan `create_all` manual — kecuali bootstrap awal via `setup.py`.
+- Perubahan skema DB wajib lewat **Alembic** (`alembic revision --autogenerate`), bukan `create_all` manual — kecuali bootstrap awal via `bootstrap.py`.
 - Satu PR = satu topik. Jangan campur refactor besar dengan fitur.
 
 ## Tes wajib sebelum PR
 
 ```bash
-# Cepat, tanpa LLM/infra — wajib lolos tiap ubah prompt:
+# Cepat, tanpa LLM/infra — wajib lolos tiap ubah prompt (454 tes):
 python -m unittest discover -s tests
 
-# End-to-end 26 kasus (butuh PG + Redis + LLM):
+# End-to-end 29 kasus (butuh PG + Redis + LLM):
 python -m tests.run_eval
 # Opt-in LLM-as-judge:
 python -m tests.run_eval --judge
@@ -43,7 +43,7 @@ PR dengan tes merah tidak akan di-merge. Bila 2 tes `TestNativeTools` gagal loka
 ```bash
 pip install -r requirements.txt
 cp .env.example .env   # lalu isi API key
-python setup.py --check-only
+python bootstrap.py --check-only
 python api_server.py
 ```
 

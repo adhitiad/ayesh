@@ -29,9 +29,14 @@ from src.core.routing.tools import get_quarantined_tools  # noqa: F401, E402
 
 
 @_record_usage
-def route_request(user_input: str, session_id: str, _depth: int = 0) -> dict:
+def route_request(
+    user_input: str,
+    session_id: str,
+    _depth: int = 0,
+    request_id: str | None = None,
+) -> dict:
     """Route permintaan ke sub-agen. Return dict JSON. Metrik dicatat otomatis."""
-    return route_request_inner(user_input, session_id, _depth=_depth)
+    return route_request_inner(user_input, session_id, _depth=_depth, request_id=request_id)
 
 
 # ── Aliases untuk backward-compat (test_prompt_structure.py) ────────

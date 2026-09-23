@@ -1220,6 +1220,91 @@ class TestAuthRBAC(unittest.TestCase):
             self.assertIn(user["role"], ["owner", "admin", "user"])
 
 
+class TestRequireAuthenticatedFailClosed(unittest.TestCase):
+    """Finding [6]: REQUIRE_API_KEY=0 tidak boleh membuka control-plane ke anonim.
+
+    Bila REQUIRE_API_KEY=0, chat/metadata boleh dipakai tanpa key,
+    tapi endpoint control-plane (jobs, tasks, approvals, sessions, memory)
+    wajib terautentikasi (fail-closed).
+    """
+
+    def setUp(self):
+        import os
+
+        from src.core.auth.auth import create_user
+
+        self._old = os.environ.get("REQUIRE_API_KEY")
+        os.environ["REQUIRE_API_KEY"] = "0"
+        self.user = create_user("f6_test_user", "user")
+
+    def tearDown(self):
+        import os
+
+        from src.core.db.db import connect
+
+        if self._old is None:
+            os.environ.pop("REQUIRE_API_KEY", None)
+        else:
+            os.environ["REQUIRE_API_KEY"] = self._old
+
+        conn = connect()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM users WHERE id = %s;", (self.user["id"],))
+        conn.close()
+
+    @staticmethod
+    def _anon_request():
+        from unittest.mock import MagicMock
+
+        request = MagicMock()
+        request.headers.get.return_value = ""
+        return request
+
+    def test_require_authenticated_denies_anonymous_when_api_key_0(self):
+        """Anonim boleh jadi 'default' via bind, tapi control-plane harus 401."""
+        from fastapi import HTTPException
+
+        from src.core.auth.auth import bind_request_user, require_authenticated
+
+        anon = self._anon_request()
+        self.assertEqual(bind_request_user(anon), "default")
+
+        with self.assertRaises(HTTPException) as cm:
+            require_authenticated(anon)
+        self.assertEqual(cm.exception.status_code, 401)
+
+    def test_require_authenticated_allows_valid_key_when_api_key_0(self):
+        """API key valid tetap diterima walau REQUIRE_API_KEY=0."""
+        from src.core.auth.auth import require_authenticated
+
+        request = self._anon_request()
+        request.headers.get.return_value = self.user["api_key"]
+        self.assertEqual(require_authenticated(request), str(self.user["id"]))
+
+    def test_require_owner_denies_anonymous_default_resource(self):
+        """IDOR: anonim tidak boleh bertindak atas resource milik 'default'."""
+        from fastapi import HTTPException
+
+        from src.core.auth.auth import require_owner
+
+        with self.assertRaises(HTTPException) as cm:
+            require_owner(self._anon_request(), "default")
+        self.assertEqual(cm.exception.status_code, 401)
+
+    def test_is_authenticated_flag_tracks_real_auth(self):
+        """is_authenticated False untuk anonim, True setelah bind key valid."""
+        from src.core.auth.auth import bind_request_user, is_authenticated
+
+        # Reset state ContextVar terlebih dahulu (ContextVar persist lintas test).
+        bind_request_user(self._anon_request())
+        self.assertFalse(is_authenticated())
+
+        authed = self._anon_request()
+        authed.headers.get.return_value = self.user["api_key"]
+        bind_request_user(authed)
+        self.assertTrue(is_authenticated())
+
+
 class TestP02OwnerUser(unittest.TestCase):
     """P0.2 - Ownership model: owner_user_id must be used for authorization."""
 
@@ -2057,12 +2142,8 @@ class TestP16UsersEndpointSecurity(unittest.TestCase):
         request = MagicMock()
         request.headers = {"X-API-Key": "test"}
         with (
-            patch(
-                "src.core.auth.auth.verify_key",
-                return_value={"id": "u1", "name": "a", "role": "admin"},
-            ),
-            patch("src.core.auth.auth.set_current_user"),
-            patch("src.core.auth.auth.set_current_user_role"),
+            patch("src.core.auth.auth_guards.require_authenticated", return_value="u1"),
+            patch("src.core.auth.auth_guards.get_current_user_role", return_value="admin"),
         ):
             with self.assertRaises(HTTPException) as ctx:
                 require_owner_only(request)
@@ -2077,13 +2158,8 @@ class TestP16UsersEndpointSecurity(unittest.TestCase):
         request = MagicMock()
         request.headers = {"X-API-Key": "test"}
         with (
-            patch(
-                "src.core.auth.auth.verify_key",
-                return_value={"id": "u1", "name": "o", "role": "owner"},
-            ),
-            patch("src.core.auth.auth.set_current_user"),
-            patch("src.core.auth.auth.set_current_user_role"),
-            patch("src.core.auth.auth.get_current_user_role", return_value="owner"),
+            patch("src.core.auth.auth_guards.require_authenticated", return_value="u1"),
+            patch("src.core.auth.auth_guards.get_current_user_role", return_value="owner"),
         ):
             result = require_owner_only(request)
             self.assertEqual(result, "u1")
@@ -2113,6 +2189,24 @@ class TestP16UsersEndpointSecurity(unittest.TestCase):
         source = inspect.getsource(api_server.create_user_endpoint)
         self.assertIn("require_owner_only", source)
         self.assertNotIn("require_admin", source)
+
+
+class TestRouterNoLegacyRateLimiterCrash(unittest.TestCase):
+    """Regresi (follow-up audit): blok rate-limit legacy di router.py mengimpor
+    modul yang sudah tidak ada (src.core.system.rate_limiter) sejak refactor reorg
+    src/core → setiap pemanggilan route_request_inner akan ModuleNotFoundError/500.
+    """
+
+    def test_route_request_inner_bantuan_runs_ok(self):
+        """route_request_inner('/bantuan', ...) harus jalan tanpa crash import rate_limiter."""
+        import uuid
+
+        from src.core.routing.router import route_request_inner
+
+        sid = f"test-route-{uuid.uuid4().hex[:8]}"
+        result = route_request_inner("/bantuan", sid)
+        self.assertIsInstance(result, dict)
+        self.assertIn("answer", result)
 
 
 class TestP17TelegramFailClosed(unittest.TestCase):
@@ -2232,8 +2326,16 @@ class TestP21RedisRateLimiter(unittest.TestCase):
         """Unknown paths return None (not rate-limited)."""
         from src.core.system.rate_limit import _scope_for_path
 
-        self.assertIsNone(_scope_for_path("/health"))
-        self.assertIsNone(_scope_for_path("/metrics"))
+        self.assertIsNone(_scope_for_path("/unknown"))
+        self.assertIsNone(_scope_for_path("/random/path"))
+
+    def test_scope_for_path_health(self):
+        """Health and metrics endpoints are rate-limited to prevent DoS."""
+        from src.core.system.rate_limit import _scope_for_path
+
+        self.assertEqual(_scope_for_path("/health"), "health")
+        self.assertEqual(_scope_for_path("/metrics"), "health")
+        self.assertEqual(_scope_for_path("/metrics/prometheus"), "health")
 
     def test_rate_limits_are_tight(self):
         """Burst and sustained limits must be reasonable (no unlimited)."""
@@ -2458,8 +2560,10 @@ class TestP24ErrorHandling(unittest.TestCase):
 
     def test_generate_request_id_format(self):
         """Request ID must be 12-char hex."""
+        from src.core.observability.logger import set_request_id
         from src.core.system.error_handling import generate_request_id
 
+        set_request_id(None)
         rid = generate_request_id()
         self.assertEqual(len(rid), 12)
         self.assertTrue(all(c in "0123456789abcdef" for c in rid))

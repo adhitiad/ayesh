@@ -10,6 +10,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 TABLES = [
     "sessions",
@@ -38,7 +39,7 @@ def _conn():
 def dump_all() -> dict:
     conn = _conn()
     cur = conn.cursor()
-    out = {"version": 1, "dumped_at": datetime.now().isoformat(), "tables": {}}
+    out: dict[str, Any] = {"version": 1, "dumped_at": datetime.now().isoformat(), "tables": {}}
     for table in TABLES:
         try:
             cur.execute(f"SELECT * FROM {table};")
@@ -46,10 +47,7 @@ def dump_all() -> dict:
             rows = []
             for r in cur.fetchall():
                 rows.append(
-                    {
-                        c: (v.isoformat() if hasattr(v, "isoformat") else v)
-                        for c, v in zip(cols, r, strict=False)
-                    }
+                    {c: (v.isoformat() if hasattr(v, "isoformat") else v) for c, v in zip(cols, r, strict=False)}
                 )
             out["tables"][table] = {"columns": cols, "rows": rows}
         except Exception as e:

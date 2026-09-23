@@ -2,9 +2,9 @@
 """Setup awal proyek: cek prasyarat, install dep, bootstrap .env, init DB.
 
 Pakai (dari root proyek):
-  python setup.py                 # penuh, aman (tak timpa .env / hapus DB)
-  python setup.py --check-only    # cek saja, tanpa install/ubah apa pun
-  python setup.py --yes           # non-interaktif (untuk skrip/CI)
+  python bootstrap.py                 # penuh, aman (tak timpa .env / hapus DB)
+  python bootstrap.py --check-only    # cek saja, tanpa install/ubah apa pun
+  python bootstrap.py --yes           # non-interaktif (untuk skrip/CI)
 
 Keluar 0 bila siap jalan, 1 bila ada yang harus dibetulkan manual.
 """
@@ -42,13 +42,14 @@ def _host_python() -> str | None:
             r = subprocess.run(args, capture_output=True, timeout=15, check=False)
             if r.returncode == 0:
                 return path
-        except Exception:
+        except Exception as exc:
+            print(f"  -- {cmd} tidak bisa dijalankan: {exc}", file=sys.stderr)
             continue
     return None
 
 
 def load_env_file(path: Path) -> dict:
-    env = {}
+    env: dict[str, str] = {}
     if not path.exists():
         return env
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -149,13 +150,13 @@ def main() -> int:
         import redis
 
         # protocol=2: server Redis lokal tua tak dukung RESP3 (alasan monkey-patch di main.py)
-        r = redis.from_url(
+        rredis = redis.from_url(
             env.get("REDIS_URL", "redis://localhost:6379/0"),
             socket_connect_timeout=3,
             socket_timeout=3,
             protocol=2,
         )
-        r.ping()
+        rredis.ping()
         ok_all &= log(True, "Redis terhubung (RESP2)")
     except Exception as e:
         ok_all &= log(False, f"Redis gagal: {str(e)[:120]}")

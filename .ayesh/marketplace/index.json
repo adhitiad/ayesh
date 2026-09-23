@@ -1,0 +1,12 @@
+{
+  "tools": [
+    {
+      "name": "kalkulator_sederhana",
+      "version": "1.0.0",
+      "description": "Kalkulator aritmatika sederhana: tambah, kurang, kali, bagi.",
+      "source": "tools/kalkulator_sederhana.py",
+      "sha256": "bead3cd26a157c0eea744409afc32411dfaece0cf84fa6bb7a9bc18db288d98c",
+      "agents": ["casual_agent", "coder_agent"]
+    }
+  ]
+}

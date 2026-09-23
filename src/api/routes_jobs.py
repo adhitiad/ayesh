@@ -2,17 +2,22 @@ from fastapi import APIRouter, HTTPException, Request
 
 from main import route_request
 from src.api.models import JobRequest
-from src.core.auth.auth import require_auth
+from src.core.auth.auth import require_authenticated
 from src.core.scheduler.scheduler import create_job, delete_job, list_jobs, set_enabled
 from src.core.system.error_handling import generate_request_id, log_internal_error
+from src.plugins.input_guard import validate_user_input
 
 router = APIRouter()
 
 
 @router.post("/jobs")
 def create_job_endpoint(request: Request, req: JobRequest):
-    owner_user_id = require_auth(request)
+    owner_user_id = require_authenticated(request)
     request_id = generate_request_id()
+    # Validasi prompt saat job creation (bukan saat execution)
+    safe, _reason = validate_user_input(req.prompt)
+    if not safe:
+        raise HTTPException(status_code=400, detail="Prompt ditolak: terdeteksi pola prompt injection.")
     try:
         result = create_job(
             req.name,
@@ -30,7 +35,7 @@ def create_job_endpoint(request: Request, req: JobRequest):
 
 @router.get("/jobs")
 def list_jobs_endpoint(request: Request, offset: int = 0, limit: int = 50):
-    owner_user_id = require_auth(request)
+    owner_user_id = require_authenticated(request)
     request_id = generate_request_id()
     jobs = list_jobs(user_id=owner_user_id, offset=offset, limit=min(limit, 100))
     return {"jobs": jobs, "request_id": request_id, "offset": offset, "limit": limit}
@@ -38,7 +43,7 @@ def list_jobs_endpoint(request: Request, offset: int = 0, limit: int = 50):
 
 @router.delete("/jobs/{job_id}")
 def delete_job_endpoint(request: Request, job_id: str):
-    owner_user_id = require_auth(request)
+    owner_user_id = require_authenticated(request)
     request_id = generate_request_id()
     if not delete_job(job_id, owner_user_id):
         raise HTTPException(status_code=404, detail="Job tidak ditemukan")
@@ -47,7 +52,7 @@ def delete_job_endpoint(request: Request, job_id: str):
 
 @router.patch("/jobs/{job_id}")
 def toggle_job_endpoint(request: Request, job_id: str, enabled: bool = True):
-    owner_user_id = require_auth(request)
+    owner_user_id = require_authenticated(request)
     request_id = generate_request_id()
     if not set_enabled(job_id, enabled, owner_user_id):
         raise HTTPException(status_code=404, detail="Job tidak ditemukan")
@@ -56,7 +61,7 @@ def toggle_job_endpoint(request: Request, job_id: str, enabled: bool = True):
 
 @router.post("/jobs/{job_id}/run")
 def run_job_once(request: Request, job_id: str):
-    owner_user_id = require_auth(request)
+    owner_user_id = require_authenticated(request)
     jobs = [j for j in list_jobs(owner_user_id) if j["id"] == job_id]
     if not jobs:
         raise HTTPException(status_code=404, detail="Job tidak ditemukan")

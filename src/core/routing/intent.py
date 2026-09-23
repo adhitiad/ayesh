@@ -59,19 +59,18 @@ def detect_actionable_intent(user_input: str) -> bool:
     return any(p in lowered for p in actionable_patterns)
 
 
-def auto_learn_keyword(
-    user_input: str, session_id: str
-) -> tuple[str, str, list] | None:
+def auto_learn_keyword(user_input: str, session_id: str) -> tuple[str, str, list] | None:
     """Gunakan LLM untuk menentukan agent, keyword, dan tools yang tepat, lalu simpan ke DB."""
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        from src.agents.llm_config import get_llm
         from src.config.routing_keywords_pg import (
-            add_keyword_with_tools,
-            invalidate_routing_cache,
+            get_routing_keywords_with_tools,
+            sanitize_keyword_tools,
         )
         from src.config.rules import get_agents_block
+        from src.core.auth.approval import propose_learning
+        from src.core.llm.factory import get_llm
 
         llm = get_llm()
 
@@ -125,9 +124,7 @@ Contoh:
             logger.warning("[%s] Auto-learn: Agent tidak valid: %s", session_id, agent)
             return None
         if not keyword or len(keyword) < 2:
-            logger.warning(
-                "[%s] Auto-learn: Keyword terlalu pendek: %s", session_id, keyword
-            )
+            logger.warning("[%s] Auto-learn: Keyword terlalu pendek: %s", session_id, keyword)
             return None
 
         valid_tools = {
@@ -139,21 +136,43 @@ Contoh:
             "learn_keyword",
         }
         allowed_tools = [t for t in allowed_tools if t in valid_tools]
-
-        ok = add_keyword_with_tools(agent, keyword, allowed_tools)
-        if ok:
-            invalidate_routing_cache()
-            logger.info(
-                "[%s] Auto-learn: Berhasil simpan '%s' -> %s (tools: %s)",
-                session_id,
-                keyword,
-                agent,
-                allowed_tools,
-            )
-            return agent, keyword, allowed_tools
-        else:
-            logger.warning("[%s] Auto-learn: Gagal simpan ke DB", session_id)
+        allowed_tools = sanitize_keyword_tools(agent, allowed_tools)
+        if allowed_tools is None:
             return None
+
+        # Keyword harus NOVEL: jangan menimpa/squat mapping routing yang sudah ada.
+        existing_map, _default_agent = get_routing_keywords_with_tools()
+        for existing_agent, existing_kws in existing_map.items():
+            if keyword in existing_kws:
+                logger.warning(
+                    "[%s] Auto-learn: keyword '%s' sudah dipakai %s — proposal dibatalkan.",
+                    session_id,
+                    keyword,
+                    existing_agent,
+                )
+                return None
+
+        # Persetujuan owner dulu sebelum keyword berlaku global (anti LLM poisoning).
+        proposal_id = propose_learning(
+            agent,
+            keyword,
+            allowed_tools,
+            session_id=session_id,
+            source_input=user_input,
+            fallback_owner_user_id=session_id,
+        )
+        if proposal_id:
+            logger.info(
+                "[%s] Auto-learn: proposal %s antre persetujuan owner; dipakai langsung untuk sesi ini.",
+                session_id,
+                proposal_id,
+            )
+        else:
+            logger.warning(
+                "[%s] Auto-learn: proposal gagal antre — TIDAK disimpan global; hasil tetap dipakai sesi ini.",
+                session_id,
+            )
+        return agent, keyword, allowed_tools
 
     except Exception as e:
         logger.error("[%s] Auto-learn error: %s", session_id, e)

@@ -1,17 +1,20 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import sessionmaker
 
 from src.config.routing_keywords_pg import get_routing_keywords
 from src.core.auth.audit import verify_audit_chain
-from src.core.auth.auth import require_admin, require_auth, require_owner
+from src.core.auth.auth import require_admin, require_authenticated, require_owner
 from src.core.db.db_engine import get_engine
 from src.core.db.models import AuditLog, Feedback, LogEntry, RequestStat, Session, SessionMemory
+from src.core.llm import templates as prompt_templates
 from src.core.observability.analytics import generate_report
 from src.core.observability.observability import get_metrics, health_check
-from src.core.observability.usage import summarize_usage
+from src.core.observability.prometheus_metrics import render as render_prometheus
+from src.core.observability.usage import summarize_usage, summarize_user_usage
 from src.core.system.error_handling import generate_request_id
 
 router = APIRouter()
@@ -42,6 +45,15 @@ def metrics():
     return m
 
 
+@router.get("/metrics/prometheus")
+def metrics_prometheus():
+    """Exposure Prometheus text format 0.0.4 (tanpa dependensi prometheus_client)."""
+    return Response(
+        content=render_prometheus(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
 @router.get("/analytics")
 def analytics(request: Request):
     require_admin(request)
@@ -51,6 +63,7 @@ def analytics(request: Request):
 @router.get("/audit")
 def list_audit(request: Request, limit: int = 50):
     require_admin(request)
+    limit = min(limit, 500)
 
     _ensure_table = lambda: None  # noqa: E731
     AuditLog.__table__.create(_SessionLocal().bind, checkfirst=True)
@@ -78,12 +91,14 @@ def verify_audit(request: Request):
 @router.get("/usage/summary")
 def usage_summary(request: Request, hours: int = 24):
     require_admin(request)
+    hours = min(hours, 720)  # Max 30 days
     return summarize_usage(hours=hours)
 
 
 @router.get("/usage/recent")
 def usage_recent(request: Request, limit: int = 20):
     require_admin(request)
+    limit = min(limit, 200)
 
     with _SessionLocal() as db:
         rows = db.query(RequestStat).order_by(RequestStat.id.desc()).limit(limit).all()
@@ -91,14 +106,55 @@ def usage_recent(request: Request, limit: int = 20):
         {
             "ts": str(r.ts),
             "session": r.session_id,
+            "user": r.user_id or "",
             "agent": r.agent_type,
             "tools": r.tools,
             "latency_s": r.latency_s,
             "tokens": r.total_tokens,
+            "model": r.model or "",
+            "cost_usd": float(r.cost_usd or 0),
             "ok": r.success,
         }
         for r in rows
     ]
+
+
+@router.get("/usage/user/{uid}")
+def usage_by_user(request: Request, uid: str, hours: int = 24):
+    """Usage stats per-user — admin atau owner saja."""
+    require_admin(request)
+    hours = min(hours, 720)  # Max 30 days
+    return summarize_user_usage(uid, hours=hours)
+
+
+@router.get("/templates")
+def list_prompt_templates(request: Request):
+    require_admin(request)
+    return [
+        {
+            "name": name,
+            "preview": (prompt_templates.get_template(name) or "")[:400],
+        }
+        for name in prompt_templates.list_templates()
+    ]
+
+
+@router.post("/templates")
+async def create_prompt_template(request: Request):
+    require_admin(request)
+    try:
+        body = await request.json()
+    except Exception as _e:
+        raise HTTPException(status_code=400, detail="body harus JSON") from _e
+    name = (body.get("name") or "").strip()
+    text = (body.get("text") or "").strip()
+    if not name or not text:
+        raise HTTPException(status_code=400, detail="name dan text wajib diisi")
+    try:
+        prompt_templates.register_template(name, text)
+    except ValueError as _e:
+        raise HTTPException(status_code=400, detail=str(_e)) from _e
+    return {"ok": True, "name": name}
 
 
 @router.get("/feedback/stats")
@@ -117,6 +173,7 @@ def feedback_stats(request: Request):
 @router.get("/feedback/recent")
 def feedback_recent(request: Request, limit: int = 10):
     require_admin(request)
+    limit = min(limit, 100)
     with _SessionLocal() as db:
         results = db.execute(select(Feedback).order_by(Feedback.created_at.desc()).limit(limit)).scalars().all()
     return [
@@ -133,7 +190,7 @@ def feedback_recent(request: Request, limit: int = 10):
 
 @router.get("/sessions")
 def list_sessions(request: Request, offset: int = 0, limit: int = 50):
-    owner_user_id = require_auth(request)
+    owner_user_id = require_authenticated(request)
     request_id = generate_request_id()
     with _SessionLocal() as db:
         sessions = (
@@ -165,13 +222,13 @@ def list_sessions(request: Request, offset: int = 0, limit: int = 50):
 
 @router.get("/sessions/{session_id}")
 def get_session(request: Request, session_id: str):
-    require_auth(request)
+    require_authenticated(request)
     request_id = generate_request_id()
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
     if not sess:
         raise HTTPException(status_code=404, detail="Session tidak ditemukan")
-    require_owner(request, sess.owner_user_id)
+    require_owner(request, str(sess.owner_user_id))
     return {
         "request_id": request_id,
         "id": sess.id,
@@ -192,31 +249,31 @@ def update_session_info(
     nama: str | None = None,
     context: str | None = None,
 ):
-    require_auth(request)
+    require_authenticated(request)
     request_id = generate_request_id()
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
             raise HTTPException(status_code=404, detail="Session tidak ditemukan")
-        require_owner(request, sess.owner_user_id)
+        require_owner(request, str(sess.owner_user_id))
         if nama is not None:
-            sess.nama = nama
+            sess.nama = nama  # type: ignore[assignment]
         if context is not None:
-            sess.context = context
-        sess.updated_at = datetime.now(datetime.timezone.utc)
+            sess.context = context  # type: ignore[assignment]
+        sess.updated_at = datetime.now(UTC)  # type: ignore[assignment]
         db.commit()
     return {"status": "ok", "session_id": session_id, "request_id": request_id}
 
 
 @router.get("/sessions/{session_id}/chat")
 def get_session_chat(request: Request, session_id: str, offset: int = 0, limit: int = 50):
-    require_auth(request)
+    require_authenticated(request)
     request_id = generate_request_id()
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
             raise HTTPException(status_code=404, detail="Session tidak ditemukan")
-        require_owner(request, sess.owner_user_id)
+        require_owner(request, str(sess.owner_user_id))
 
         messages = (
             db.query(SessionMemory)
@@ -246,13 +303,13 @@ def get_session_chat(request: Request, session_id: str, offset: int = 0, limit: 
 
 @router.get("/memory/{session_id}")
 def get_memory(request: Request, session_id: str, offset: int = 0, limit: int = 50):
-    require_auth(request)
+    require_authenticated(request)
     request_id = generate_request_id()
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
             raise HTTPException(status_code=404, detail="Session tidak ditemukan")
-        require_owner(request, sess.owner_user_id)
+        require_owner(request, str(sess.owner_user_id))
         results = (
             db.execute(
                 select(SessionMemory)
@@ -274,13 +331,13 @@ def get_memory(request: Request, session_id: str, offset: int = 0, limit: int = 
 
 @router.delete("/memory/{session_id}")
 def clear_memory(request: Request, session_id: str):
-    require_auth(request)
+    require_authenticated(request)
     request_id = generate_request_id()
     with _SessionLocal() as db:
         sess = db.query(Session).filter(Session.id == session_id).first()
         if not sess:
             raise HTTPException(status_code=404, detail="Session tidak ditemukan")
-        require_owner(request, sess.owner_user_id)
+        require_owner(request, str(sess.owner_user_id))
         db.execute(delete(SessionMemory).where(SessionMemory.session_id == session_id))
         db.commit()
     return {"status": "cleared", "session_id": session_id, "request_id": request_id}
@@ -289,6 +346,7 @@ def clear_memory(request: Request, session_id: str):
 @router.get("/logs")
 def get_logs(request: Request, level: str | None = None, limit: int = 50):
     require_admin(request)
+    limit = min(limit, 500)
     with _SessionLocal() as db:
         stmt = select(LogEntry).order_by(LogEntry.timestamp.desc()).limit(limit)
         if level:

@@ -15,7 +15,7 @@ import os
 import platform
 import shutil
 import socket
-import subprocess
+import subprocess  # nosec B404 (jalankan perintah introspectsi)
 import sys
 import time
 from urllib.parse import urlparse
@@ -68,7 +68,7 @@ def list_partitions() -> list:
                 except OSError:
                     continue
                 parts.append({"mount": mp, "total_gb": _gb(u.total), "free_gb": _gb(u.free)})
-    except Exception:  # noqa: S110
+    except Exception:  # noqa: S110  # nosec B110
         pass
     return parts
 
@@ -107,7 +107,7 @@ def _ram_total_gb() -> float | None:
                 if line.startswith("MemTotal:"):
                     kb = int(line.split()[1])
                     return _gb(kb * 1024)
-    except Exception:  # noqa: S110
+    except Exception:  # noqa: S110  # nosec B110
         pass
     return None
 
@@ -134,7 +134,7 @@ def _safe_sysinfo_run(args: list, **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
     kwargs.setdefault("timeout", 8)
-    return subprocess.run(args, shell=False, check=False, **kwargs)
+    return subprocess.run(args, shell=False, check=False, **kwargs)  # nosec B603
 
 
 def _ram_sticks() -> int | None:
@@ -184,7 +184,7 @@ def get_gpu_info() -> str | None:
             name = line.strip()
             if name:
                 return name
-    except Exception:  # noqa: S110
+    except Exception:  # noqa: S110  # nosec B110
         pass
     return None
 

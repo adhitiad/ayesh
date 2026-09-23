@@ -4,16 +4,24 @@ import asyncio
 import concurrent.futures
 import logging
 import os
+import sys
+from pathlib import Path
 
 import grpc
 
-import ayesh_pb2
-import ayesh_pb2_grpc
-from main import route_request
-from src.core.db.db_engine import get_engine
-from src.core.observability.observability import health_check
-from src.core.system.error_handling import generate_request_id
-from src.core.system.redis_patch import apply_redis_patch
+# Generated stubs (src/ayesh_pb2*.py) meng-import dirinya sebagai top-level module.
+# Tambahkan direktori src/ ke sys.path sebelum import stub.
+_SRC_DIR = Path(__file__).resolve().parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.append(str(_SRC_DIR))
+
+import ayesh_pb2  # noqa: E402
+import ayesh_pb2_grpc  # noqa: E402
+from main import route_request  # noqa: E402
+from src.core.db.db_engine import get_engine  # noqa: E402
+from src.core.observability.observability import health_check  # noqa: E402
+from src.core.system.error_handling import generate_request_id  # noqa: E402
+from src.core.system.redis_patch import apply_redis_patch  # noqa: E402
 
 apply_redis_patch()
 
@@ -156,9 +164,11 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
     async def ListFiles(self, request, context):
         """List files di directory."""
         try:
-            from src.plugins.core_tools import _safe_path
+            from src.plugins.file_safety import _safe_path
 
-            path = _safe_path(request.path)
+            ok, path = _safe_path(request.path)
+            if not ok:
+                return ayesh_pb2.ListFilesResponse(files=[])
             files = []
             for entry in os.scandir(path):
                 files.append(
@@ -176,9 +186,11 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
     async def ReadFile(self, request, context):
         """Baca file content."""
         try:
-            from src.plugins.core_tools import _safe_path
+            from src.plugins.file_safety import _safe_path
 
-            path = _safe_path(request.path)
+            ok, path = _safe_path(request.path)
+            if not ok:
+                return ayesh_pb2.ReadFileResponse(content=path)
             with open(path, encoding="utf-8") as f:
                 content = f.read()
             return ayesh_pb2.ReadFileResponse(content=content)
@@ -189,9 +201,11 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
     async def WriteFile(self, request, context):
         """Tulis file content."""
         try:
-            from src.plugins.core_tools import _safe_path
+            from src.plugins.file_safety import _safe_path
 
-            path = _safe_path(request.path)
+            ok, path = _safe_path(request.path)
+            if not ok:
+                return ayesh_pb2.WriteFileResponse(success=False, message=path)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(request.content)
             return ayesh_pb2.WriteFileResponse(success=True, message="File saved")

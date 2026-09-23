@@ -13,6 +13,7 @@ logger = logging.getLogger("ayesh.servers")
 def run_grpc():
     """Jalankan gRPC server di thread."""
     import asyncio
+
     from src.grpc_server import serve
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -22,6 +23,7 @@ def run_grpc():
 def run_rest():
     """Jalankan REST API server."""
     import uvicorn
+
     from api_server import app
 
     logger.info("REST API server running on :8080")

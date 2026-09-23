@@ -9,13 +9,11 @@ import grpc
 
 import ayesh_pb2
 import ayesh_pb2_grpc
-
 from main import route_request
-from src.core.system.redis_patch import apply_redis_patch
-from src.core.system.error_handling import generate_request_id
-from src.core.observability.observability import health_check
 from src.core.db.db_engine import get_engine
-from src.core.auth.auth import get_current_user_id
+from src.core.observability.observability import health_check
+from src.core.system.error_handling import generate_request_id
+from src.core.system.redis_patch import apply_redis_patch
 
 apply_redis_patch()
 
@@ -30,7 +28,7 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
             async for msg in request_iterator:
                 if msg.interrupt:
                     yield ayesh_pb2.ChatChunk(
-                        token="",
+                        token="",  # nosec B106 — teks streaming, bukan credential
                         tool_calls=[],
                         done=True,
                         usage=ayesh_pb2.Usage(
@@ -74,7 +72,7 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
                 if tool_calls_data:
                     for tc in tool_calls_data:
                         yield ayesh_pb2.ChatChunk(
-                            token="",
+                            token="",  # nosec B106 — teks streaming, bukan credential
                             tool_calls=[
                                 ayesh_pb2.ToolCall(
                                     name=tc.get("name", ""),
@@ -88,7 +86,7 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
                         )
 
                 yield ayesh_pb2.ChatChunk(
-                    token="",
+                    token="",  # nosec B106 — teks streaming, bukan credential
                     tool_calls=[],
                     done=True,
                     usage=ayesh_pb2.Usage(
@@ -101,7 +99,7 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
         except Exception as e:
             logger.error("ChatStream error: %s", e)
             yield ayesh_pb2.ChatChunk(
-                token=f"Error: {str(e)}",
+                token=f"Error: {e!s}",
                 tool_calls=[],
                 done=True,
                 usage=ayesh_pb2.Usage(prompt_tokens=0, completion_tokens=0, cost_usd=0.0),
@@ -150,7 +148,7 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
         except Exception as e:
             logger.error("Chat error: %s", e)
             return ayesh_pb2.ChatResponse(
-                content=f"Error: {str(e)}",
+                content=f"Error: {e!s}",
                 agent_type="error",
                 request_id="",
             )
@@ -181,12 +179,12 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
             from src.plugins.core_tools import _safe_path
 
             path = _safe_path(request.path)
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 content = f.read()
             return ayesh_pb2.ReadFileResponse(content=content)
         except Exception as e:
             logger.error("ReadFile error: %s", e)
-            return ayesh_pb2.ReadFileResponse(content=f"Error: {str(e)}")
+            return ayesh_pb2.ReadFileResponse(content=f"Error: {e!s}")
 
     async def WriteFile(self, request, context):
         """Tulis file content."""
@@ -205,6 +203,7 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
         """List sessions."""
         try:
             from sqlalchemy import select
+
             from src.core.db.models import Session as SessionModel
 
             engine = get_engine()
@@ -229,6 +228,7 @@ class AyeshServicer(ayesh_pb2_grpc.AyeshServiceServicer):
         """Get session by ID."""
         try:
             from sqlalchemy import select
+
             from src.core.db.models import Session as SessionModel
 
             engine = get_engine()

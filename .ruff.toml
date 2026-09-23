@@ -2,6 +2,11 @@
 target-version = "py314"
 line-length = 120
 
+extend-exclude = [
+    "src/ayesh_pb2.py",        # generated — regenerate from proto/ayesh.proto
+    "src/ayesh_pb2_grpc.py",   # generated — regenerate from proto/ayesh.proto
+]
+
 [lint]
 select = ["E", "F", "W", "I", "S", "B", "A", "UP", "SIM", "RUF", "DTZ", "BLE", "PLW", "ISC"]
 ignore = [

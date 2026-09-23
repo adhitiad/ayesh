@@ -1385,11 +1385,10 @@ class TestP03NoJobPrefixTrust(unittest.TestCase):
 
     def test_create_job_defaults_to_deny_all(self):
         """create_job should default to deny_all approval_policy."""
-        from src.core.scheduler.scheduler import create_job, delete_job
-
         # Clean up any leftover jobs from previous tests
         from src.core.db.db_engine import get_session
         from src.core.db.models import ScheduledJob
+        from src.core.scheduler.scheduler import create_job, delete_job
 
         with get_session() as db:
             old = db.query(ScheduledJob).filter(ScheduledJob.owner_user_id.in_(["test_owner", "test_user"])).all()

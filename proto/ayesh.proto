@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package ayesh;
+
+service AyeshService {
+  // Chat - bidirectional streaming untuk token-by-token response
+  rpc ChatStream (stream ChatMessage) returns (stream ChatChunk);
+
+  // Chat async - kirim pesan, dapatkan response sekali
+  rpc Chat (ChatRequest) returns (ChatResponse);
+
+  // File operations - unary
+  rpc ListFiles (ListFilesRequest) returns (ListFilesResponse);
+  rpc ReadFile (ReadFileRequest) returns (ReadFileResponse);
+  rpc WriteFile (WriteFileRequest) returns (WriteFileResponse);
+
+  // Sessions - unary
+  rpc ListSessions (Empty) returns (ListSessionsResponse);
+  rpc GetSession (GetSessionRequest) returns (Session);
+
+  // Skills - unary
+  rpc ListSkills (Empty) returns (ListSkillsResponse);
+  rpc InstallSkill (InstallSkillRequest) returns (Status);
+
+  // Config - unary
+  rpc GetConfig (Empty) returns (Config);
+  rpc SetConfig (SetConfigRequest) returns (Status);
+
+  // Health - unary
+  rpc HealthCheck (Empty) returns (HealthResponse);
+}
+
+// ── Chat ──────────────────────────────────────────────────────
+
+message ChatMessage {
+  string message = 1;
+  string session_id = 2;
+  bool interrupt = 3;
+}
+
+message ChatChunk {
+  string token = 1;
+  repeated ToolCall tool_calls = 2;
+  bool done = 3;
+  Usage usage = 4;
+}
+
+message ToolCall {
+  string name = 1;
+  string status = 2;
+  int32 progress = 3;
+  string result = 4;
+}
+
+message Usage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  double cost_usd = 3;
+}
+
+message ChatRequest {
+  string message = 1;
+  string session_id = 2;
+}
+
+message ChatResponse {
+  string content = 1;
+  repeated ToolCall tool_calls = 2;
+  Usage usage = 3;
+  string agent_type = 4;
+  string request_id = 5;
+}
+
+// ── Files ──────────────────────────────────────────────────────
+
+message ListFilesRequest {
+  string path = 1;
+}
+
+message ListFilesResponse {
+  repeated FileEntry files = 1;
+}
+
+message FileEntry {
+  string name = 1;
+  string type = 2;
+  int64 size = 3;
+}
+
+message ReadFileRequest {
+  string path = 1;
+}
+
+message ReadFileResponse {
+  string content = 1;
+  string encoding = 2;
+}
+
+message WriteFileRequest {
+  string path = 1;
+  string content = 2;
+}
+
+message WriteFileResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ── Sessions ────────────────────────────────────────────────────
+
+message Empty {}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+message Session {
+  string id = 1;
+  string agent_type = 2;
+  string created_at = 3;
+  string last_message = 4;
+}
+
+message GetSessionRequest {
+  string id = 1;
+}
+
+// ── Skills ──────────────────────────────────────────────────────
+
+message ListSkillsResponse {
+  repeated Skill skills = 1;
+}
+
+message Skill {
+  string name = 1;
+  string description = 2;
+  bool installed = 3;
+}
+
+message InstallSkillRequest {
+  string name = 1;
+  bool uninstall = 2;
+}
+
+// ── Config ──────────────────────────────────────────────────────
+
+message Config {
+  string provider = 1;
+  string api_key = 2;
+  string model = 3;
+  string host = 4;
+  int32 port = 5;
+  string grpc_host = 6;
+  int32 grpc_port = 7;
+}
+
+message SetConfigRequest {
+  Config config = 1;
+}
+
+// ── Status ──────────────────────────────────────────────────────
+
+message Status {
+  bool success = 1;
+  string message = 2;
+}
+
+// ── Health ──────────────────────────────────────────────────────
+
+message HealthResponse {
+  bool healthy = 1;
+  string version = 2;
+  bool postgres_connected = 3;
+  bool redis_connected = 4;
+}

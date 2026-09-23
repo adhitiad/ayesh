@@ -25,6 +25,8 @@ alembic>=1.20.0
 redis>=8.1.0
 python-dotenv>=1.2.3
 aiogram>=3.31.0
+grpcio>=1.84.0
+grpcio-tools>=1.84.0
 
 # Test factories
 factory-boy>=3.3.0

@@ -45,11 +45,7 @@
         "CONTEXT7_API_KEY": "Bearer ${CONTEXT7_API_KEY}"
       }
     },
-    // "better-auth": {
-    //   "type": "remote",
-    //   "url": "https://mcp.better-auth.com/mcp",
-    //   "headers": {}
-    // },
+
     "agent-platform-mcp": {
       "type": "remote",
       "url": "https://aiplatform.googleapis.com/mcp/generate",

@@ -34,10 +34,6 @@ ayesh/
 # ===== Proto definition (source of truth) =====
 # proto/ayesh.proto
 
-# ===== Generated gRPC stubs (jangan commit, generate dari proto) =====
-src/ayesh_pb2.py
-src/ayesh_pb2_grpc.py
-
 # ===== Agent harness lokal =====
 .kilo/
 

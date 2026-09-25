@@ -72,10 +72,45 @@ class UserRequest(BaseModel):
             raise ValueError("name terlalu panjang (maks 100 karakter)")
         if not self.name.strip():
             raise ValueError("name tidak boleh kosong")
-        if self.role not in (None, "user", "admin", "owner"):
-            raise ValueError("role harus: user, admin, atau owner")
+        # admin legacy → vip; valid: user, vip, owner
+        if self.role == "admin":
+            self.role = "vip"  # type: ignore
+        if self.role not in (None, "user", "vip", "owner"):
+            raise ValueError("role harus: user, vip, atau owner")
         if self.description and len(self.description) > 500:
             raise ValueError("description terlalu panjang (maks 500 karakter termasuk spasi)")
+
+
+class RegisterRequest(BaseModel):
+    name: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.name) > 100:
+            raise ValueError("name terlalu panjang (maks 100 karakter)")
+        if not self.name.strip():
+            raise ValueError("name tidak boleh kosong")
+        if not re.match(r"^[a-zA-Z0-9 _\-]+$", self.name.strip()):
+            raise ValueError("name hanya boleh huruf/angka/spasi/underscore/hyphen")
+
+
+class VipUpgradeRequest(BaseModel):
+    uid: str | None = None
+    user_id: str | None = None
+    external_ref: str
+    amount_cents: int | None = 1387
+    currency: str | None = "USD"
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if not self.external_ref or len(self.external_ref) > 100:
+            raise ValueError("external_ref wajib 1-100 karakter")
+        if not re.match(r"^[a-zA-Z0-9_\-]+$", self.external_ref):
+            raise ValueError("external_ref hanya huruf/angka/underscore/hyphen")
+        if self.amount_cents is not None and self.amount_cents < 0:
+            raise ValueError("amount_cents tidak boleh negatif")
 
 
 class UserLLMConfigRequest(BaseModel):

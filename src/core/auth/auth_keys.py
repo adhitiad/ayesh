@@ -16,8 +16,17 @@ _ROTATION_COLUMNS = {
     "old_prefix": "VARCHAR(20)",
     "old_key_expires_at": "TIMESTAMP",
 }
+_VIP_COLUMNS = {
+    "vip_since": "TIMESTAMP",
+    "vip_expires_at": "TIMESTAMP",
+    "vip_ref": "VARCHAR(100)",
+    "vip_amount_cents": "INTEGER",
+}
+_VALID_ROLES = {"owner", "vip", "user"}
 _columns_ensured = False
 _columns_lock = threading.Lock()
+_vip_columns_ensured = False
+_vip_tables_ensured = False
 
 # ── Per-user config cache (TTL 5 min) ─────────────────────────────────
 _CACHE_TTL = float(os.getenv("USER_CONFIG_CACHE_TTL", "300"))
@@ -228,17 +237,119 @@ def _ensure_user_config_tables():
             _user_config_tables_ensured = True
 
 
+def _ensure_vip_columns():
+    """Tambah kolom VIP di users bila belum ada + fix constraint + migrate legacy admin→vip."""
+    global _vip_columns_ensured
+    if _vip_columns_ensured:
+        return
+    with _columns_lock:
+        if _vip_columns_ensured:
+            return
+        try:
+            from sqlalchemy import inspect, text
+
+            from src.core.db.db_engine import get_engine
+
+            engine = get_engine()
+            cols = {c["name"] for c in inspect(engine).get_columns("users")}
+            missing = [n for n in _VIP_COLUMNS if n not in cols]
+            if missing:
+                with engine.begin() as conn:
+                    for name in missing:
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {_VIP_COLUMNS[name]}"))
+            # Fix constraint users_role_check to allow vip (and keep admin for compat)
+            try:
+                with engine.begin() as conn:
+                    # Drop old check if exists and recreate with vip
+                    conn.execute(text("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role = ANY (ARRAY['owner'::text, 'vip'::text, 'user'::text, 'admin'::text]))"
+                        )
+                    )
+            except Exception as _e:
+                logging.getLogger(__name__).debug("fix role constraint skipped: %s", _e)
+            # Migrate legacy role admin → vip
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("UPDATE users SET role='vip' WHERE role='admin'"))
+            except Exception as _e:
+                logging.getLogger(__name__).debug("migrate admin→vip skipped: %s", _e)
+        except Exception:
+            logging.getLogger(__name__).exception("Gagal migrasi kolom VIP di tabel users")
+        finally:
+            _vip_columns_ensured = True
+
+
+def _ensure_vip_tables():
+    """Buat tabel vip_upgrades bila belum ada + tambah kolom pending|sukses."""
+    global _vip_tables_ensured
+    if _vip_tables_ensured:
+        return
+    with _columns_lock:
+        if _vip_tables_ensured:
+            return
+        try:
+            from sqlalchemy import inspect, text
+
+            from src.core.db.db_engine import get_engine
+            from src.core.db.models import Base, VipUpgrade
+
+            engine = get_engine()
+            Base.metadata.create_all(engine, tables=[VipUpgrade.__table__])
+            # Lazy add status columns untuk DB lama
+            try:
+                cols = {c["name"] for c in inspect(engine).get_columns("vip_upgrades")}
+                wanted = {
+                    "status": "VARCHAR(20) NOT NULL DEFAULT 'pending'",
+                    "provider": "VARCHAR(50) NOT NULL DEFAULT 'manual'",
+                    "raw_payload": "TEXT",
+                    "paid_at": "TIMESTAMP",
+                    "applied_at": "TIMESTAMP",
+                    "updated_at": "TIMESTAMP NOT NULL DEFAULT NOW()",
+                }
+                for col, ddl in wanted.items():
+                    if col not in cols:
+                        with engine.begin() as conn:
+                            conn.execute(text(f"ALTER TABLE vip_upgrades ADD COLUMN {col} {ddl}"))
+                # Backfill: pending existing yang user sudah vip → success
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            "UPDATE vip_upgrades SET status='success', paid_at=COALESCE(paid_at, created_at), updated_at=NOW() WHERE status='pending' AND user_id IN (SELECT id FROM users WHERE role='vip')"
+                        )
+                    )
+                    # Baris success lama pasti sudah memberi hak → tandai applied
+                    # (mencegah replay ref lama memberi perpanjangan gratis).
+                    conn.execute(
+                        text(
+                            "UPDATE vip_upgrades SET applied_at=COALESCE(applied_at, paid_at, created_at) WHERE status='success' AND applied_at IS NULL"
+                        )
+                    )
+            except Exception as _e:
+                logging.getLogger(__name__).debug("migrasi kolom vip_upgrades skipped: %s", _e)
+        except Exception:
+            logging.getLogger(__name__).exception("Gagal migrasi tabel vip_upgrades")
+        finally:
+            _vip_tables_ensured = True
+
+
 def create_user(name: str, role: str = "user") -> dict:
     """Buat user, return {id, name, api_key (plaintext, tampil SEKALI), prefix, role}."""
     _ensure_rotation_columns()
+    _ensure_vip_columns()
+    _ensure_vip_tables()
     _ensure_user_config_tables()
     from src.core.db.db_engine import get_session
     from src.core.db.models import User
 
     name = (name or "").strip()[:100] or "tanpa-nama"
     role = (role or "user").lower()
-    if role not in ("owner", "admin", "user"):
-        role = "user"
+    # admin deprecated → vip
+    if role == "admin":
+        role = "vip"
+    if role not in _VALID_ROLES:
+        raise ValueError("role harus: user, vip, atau owner")
     api_key = f"fr_{secrets.token_hex(16)}"
     uid = str(uuid.uuid4())
 
@@ -271,6 +382,8 @@ def verify_key(api_key: str) -> dict | None:
     if not api_key:
         return None
     _ensure_rotation_columns()
+    _ensure_vip_columns()
+    _ensure_vip_tables()
     _ensure_user_config_tables()
     from src.core.auth.auth_context import _utcnow
     from src.core.db.db_engine import get_session
@@ -304,7 +417,29 @@ def verify_key(api_key: str) -> dict | None:
                 and _verify_hash(api_key.strip(), str(user.old_key_hash or ""))
             )
         if valid:
-            return {"id": str(user.id), "name": user.name, "role": user.role}
+            role = str(user.role or "user")
+            expires: datetime | None = user.vip_expires_at  # type: ignore[assignment]
+            # Masa aktif vip habis → turunkan peran ke user (lazy, fail-closed).
+            # Hanya role yang ditulis; vip_since/vip_expires_at/vip_ref dipertahankan
+            # sebagai riwayat (tampilan billing & audit).
+            if role == "vip" and expires is not None:
+                try:
+                    expired = expires <= _utcnow()
+                except Exception:
+                    # timestamp tidak kompatibel (aware/naive campur) → anggap kedaluwarsa
+                    expired = True
+                if expired:
+                    user.role = "user"  # type: ignore[assignment]
+                    db.commit()
+                    invalidate_user_cache(str(user.id))
+                    logging.getLogger(__name__).info("vip expired → user: uid=%s expires=%s", user.id, expires)
+                    role = "user"
+            return {
+                "id": str(user.id),
+                "name": user.name,
+                "role": role,
+                "vip_expires_at": expires,
+            }
         return None
 
 
@@ -355,6 +490,7 @@ def rotate_user_key(uid: str, grace_hours: int | None = None) -> dict | None:
 
 def list_users() -> list:
     _ensure_rotation_columns()
+    _ensure_vip_columns()
     from src.core.db.db_engine import get_session
     from src.core.db.models import User
 
@@ -368,9 +504,117 @@ def list_users() -> list:
                 "role": u.role,
                 "active": u.active,
                 "old_key_valid_until": u.old_key_expires_at.isoformat() if u.old_key_expires_at else None,
+                "vip_since": u.vip_since.isoformat() if getattr(u, "vip_since", None) else None,
+                "vip_expires_at": u.vip_expires_at.isoformat() if getattr(u, "vip_expires_at", None) else None,
+                "vip_ref": getattr(u, "vip_ref", None),
             }
             for u in users
         ]
+
+
+def get_user_by_id(uid: str) -> dict | None:
+    """Ambil user by id dengan vip metadata."""
+    _ensure_rotation_columns()
+    _ensure_vip_columns()
+    from src.core.db.db_engine import get_session
+    from src.core.db.models import User
+
+    with get_session() as db:
+        u = db.query(User).filter(User.id == uid).first()
+        if not u:
+            return None
+        return {
+            "id": u.id,
+            "name": u.name,
+            "prefix": u.prefix,
+            "role": u.role,
+            "active": u.active,
+            "vip_since": u.vip_since.isoformat() if getattr(u, "vip_since", None) else None,
+            "vip_expires_at": u.vip_expires_at.isoformat() if getattr(u, "vip_expires_at", None) else None,
+            "vip_ref": getattr(u, "vip_ref", None),
+            "vip_amount_cents": getattr(u, "vip_amount_cents", None),
+        }
+
+
+def set_user_vip(
+    uid: str, external_ref: str | None = None, amount_cents: int | None = None, days: int = 30
+) -> dict | None:
+    """Upgrade user → vip. Return dict atau None bila user tidak ditemukan."""
+    _ensure_rotation_columns()
+    _ensure_vip_columns()
+    _ensure_vip_tables()
+    from src.core.auth.auth_context import _utcnow
+    from src.core.db.db_engine import get_session
+    from src.core.db.models import User, VipUpgrade
+
+    with get_session() as db:
+        user = db.query(User).filter(User.id == uid).first()
+        if not user or not user.active:
+            return None
+        if user.role == "owner":
+            return None  # owner tidak perlu vip
+        # Idempotency: external_ref unik. applied_at terisi = ref ini SUDAH pernah
+        # memberi hak → replay tidak boleh memberi perpanjangan (juga setelah vip
+        # expired / di-demote). Ref baru = pembelian baru → boleh apply/extend.
+        now = _utcnow()
+        if external_ref:
+            exists = db.query(VipUpgrade).filter(VipUpgrade.external_ref == external_ref).first()
+            if exists:
+                if getattr(exists, "applied_at", None) is not None:
+                    return {"id": uid, "role": user.role, "vip_ref": user.vip_ref, "already": True}
+                # belum ke-apply (pending→success, atau success dari percobaan yang gagal)
+                exists.status = "success"  # type: ignore[assignment]
+                exists.paid_at = exists.paid_at or now  # type: ignore[assignment]
+                exists.updated_at = now  # type: ignore[assignment]
+                exists.applied_at = now  # type: ignore[assignment]
+            else:
+                db.add(
+                    VipUpgrade(
+                        id=str(uuid.uuid4()),
+                        user_id=uid,
+                        external_ref=external_ref,
+                        amount_cents=amount_cents or 1387,
+                        currency="USD",
+                        status="success",
+                        paid_at=now,
+                        applied_at=now,
+                    )
+                )
+        user.role = "vip"  # type: ignore[assignment]
+        user.vip_since = now  # type: ignore[assignment]
+        user.vip_ref = external_ref  # type: ignore[assignment]
+        user.vip_amount_cents = amount_cents or 1387  # type: ignore[assignment]
+        if days:
+            try:
+                user.vip_expires_at = now + timedelta(days=days)  # type: ignore[assignment]
+            except Exception as _e:
+                logging.getLogger(__name__).debug("vip_expires set skipped: %s", _e)
+        db.commit()
+        invalidate_user_cache(uid)
+        return {"id": uid, "role": "vip", "vip_since": now.isoformat(), "vip_ref": external_ref}
+
+
+def demote_user_vip(uid: str) -> dict | None:
+    """Downgrade vip → user (owner-only)."""
+    _ensure_rotation_columns()
+    _ensure_vip_columns()
+    from src.core.db.db_engine import get_session
+    from src.core.db.models import User
+
+    with get_session() as db:
+        user = db.query(User).filter(User.id == uid).first()
+        if not user or not user.active:
+            return None
+        if user.role != "vip":
+            return None
+        user.role = "user"  # type: ignore[assignment]
+        user.vip_since = None  # type: ignore[assignment]
+        user.vip_expires_at = None  # type: ignore[assignment]
+        user.vip_ref = None  # type: ignore[assignment]
+        user.vip_amount_cents = None  # type: ignore[assignment]
+        db.commit()
+        invalidate_user_cache(uid)
+        return {"id": uid, "role": "user"}
 
 
 def deactivate_user(uid: str) -> bool:
@@ -403,15 +647,15 @@ def list_user_llm_configs(
 ) -> list:
     """List LLM config milik user.
 
-    - Owner/admin bisa lihat semua user, api_key dimask.
-    - User biasa hanya bisa lihat config sendiri (api_key ditampilkan) atau config public user lain (api_key dimask).
+    - Owner bisa lihat semua user, api_key dimask.
+    - vip/user hanya bisa lihat config sendiri (api_key ditampilkan) atau config public user lain (api_key dimask).
     """
     _ensure_user_config_tables()
     from src.core.db.db_engine import get_session
     from src.core.db.models import UserLLMConfig
 
     is_self = viewer_uid == uid
-    is_privileged = viewer_role in ("owner", "admin")
+    is_privileged = viewer_role == "owner"
     limit = min(limit, 100)
 
     with get_session() as db:

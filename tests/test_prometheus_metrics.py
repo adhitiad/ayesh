@@ -75,9 +75,11 @@ class TestMetricsEndpoint(unittest.TestCase):
 
     def test_prometheus_endpoint_content_type(self):
         from api_server import app
-
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.get("/metrics/prometheus")
+        from src.core.auth.auth import create_user
+        owner = create_user("prom_owner", "owner")
+        from fastapi.testclient import TestClient as TC2
+        with TC2(app, raise_server_exceptions=False) as client:
+            resp = client.get("/metrics/prometheus", headers={"X-API-Key": owner["api_key"]})
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.headers["content-type"].startswith("text/plain"))
         self.assertIn("version=0.0.4", resp.headers["content-type"])
@@ -86,9 +88,10 @@ class TestMetricsEndpoint(unittest.TestCase):
 
     def test_json_metrics_backward_compat(self):
         from api_server import app
-
+        from src.core.auth.auth import create_user
+        owner = create_user("prom_owner2", "owner")
         with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.get("/metrics")
+            resp = client.get("/metrics", headers={"X-API-Key": owner["api_key"]})
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertIn("postgres_healthy", body)

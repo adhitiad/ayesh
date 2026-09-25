@@ -1,20 +1,13 @@
 """Multi-user + API keys with RBAC — re-export layer.
 
-- users: id, name, key_hash (sha256), prefix (8 char awal, untuk identifikasi),
-  role (owner|admin|user), active, created_at. Rotasi: old_key_hash / old_prefix /
-  old_key_expires_at menahan key lama agar tetap valid selama masa tenggang.
-- Auth: header X-API-Key atau Authorization: Bearer. Default produksi: REQUIRE_API_KEY=1
-  (key wajib; tanpa key valid → 401). Bila REQUIRE_API_KEY=0 eksplisit, /chat* boleh
-  tanpa key (user "default"); endpoint control-plane TETAP wajib key (fail-closed).
-- Scope data: preferensi & proyek difilter per user via ContextVar current_user.
-  Single-user lama otomatis jadi user "default" (kolom DEFAULT 'default').
-- Rotasi API key: rotate_user_key() membuat key baru; key lama tetap diakui oleh
-  verify_key() selama `API_KEY_ROTATION_GRACE_HOURS` (default 24). Masa tenggang
-  memberhentikan key lama TANPA memutus integrasi yang belum di-update.
+- users: id, name, key_hash (salt$sha256), prefix, role (owner|vip|user), active.
+  vip = paid tier $13.87 via webhook; user/vip hanya self-data, owner = global.
+- Auth: header X-API-Key atau Authorization: Bearer. Default REQUIRE_API_KEY=1 (fail-closed).
+  Bila REQUIRE_API_KEY=0, chat boleh anonim tapi control-plane tetap fail-closed.
 - RBAC roles:
-  owner: users, jobs, approvals, logs, audit, analytics, system configuration
-  admin: operational endpoints (tasks, sessions, memory, chat)
-  user: chat, own sessions, own memory, own tasks
+  owner: full (users, keywords, templates, marketplace, audit, analytics, vip manage)
+  vip:   paid user — same API as user, higher quota + premium models
+  user:  chat, own sessions/memory/tasks/plans, own llm/mcp/skill configs
 """
 
 # ── Re-export all public symbols from submodules ───────────────────────
@@ -42,15 +35,21 @@ from src.core.auth.auth_guards import (
     require_owner,
     require_owner_only,
     require_owner_or_admin,
+    require_self_or_owner,
+    require_vip,
 )
 from src.core.auth.auth_keys import (
     _ensure_rotation_columns,
     _ensure_user_config_tables,
+    _ensure_vip_columns,
+    _ensure_vip_tables,
     _hash_key,
     add_user_llm_config,
     create_user,
     deactivate_user,
     delete_user_llm_config,
+    demote_user_vip,
+    get_user_by_id,
     get_user_default_llm,
     invalidate_user_cache,
     is_mcp_enabled_for_user,
@@ -62,6 +61,7 @@ from src.core.auth.auth_keys import (
     rotate_user_key,
     set_user_mcp_override,
     set_user_skill_override,
+    set_user_vip,
     update_user_llm_config_entry,
     verify_key,
 )
@@ -72,6 +72,8 @@ __all__ = [
     "_authenticated",
     "_ensure_rotation_columns",
     "_ensure_user_config_tables",
+    "_ensure_vip_columns",
+    "_ensure_vip_tables",
     "_hash_key",
     "_utcnow",
     "add_user_llm_config",
@@ -83,10 +85,12 @@ __all__ = [
     "current_user_role",
     "deactivate_user",
     "delete_user_llm_config",
+    "demote_user_vip",
     "get_current_user",
     "get_current_user_id",
     "get_current_user_llm_config",
     "get_current_user_role",
+    "get_user_by_id",
     "get_user_default_llm",
     "invalidate_user_cache",
     "is_authenticated",
@@ -102,12 +106,15 @@ __all__ = [
     "require_owner",
     "require_owner_only",
     "require_owner_or_admin",
+    "require_self_or_owner",
+    "require_vip",
     "rotate_user_key",
     "set_current_user",
     "set_current_user_llm_config",
     "set_current_user_role",
     "set_user_mcp_override",
     "set_user_skill_override",
+    "set_user_vip",
     "update_user_llm_config_entry",
     "verify_key",
 ]

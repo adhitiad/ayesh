@@ -285,7 +285,7 @@ def get_llm_for_user(user_llm_config=None):
 
             try:
                 fallback_ids = json.loads(user_llm_config.fallback_config_ids)
-            except json.JSONDecodeError, TypeError:
+            except (json.JSONDecodeError, TypeError):
                 fallback_ids = []
             for fb_id in fallback_ids:
                 try:

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 
-from src.core.auth.auth import require_admin, require_authenticated
+from src.core.auth.auth import require_authenticated, require_vip
 from src.plugins import marketplace as mp
 
 router = APIRouter()
@@ -19,8 +19,8 @@ def marketplace_list(request: Request):
 
 @router.post("/marketplace/{name}/install")
 def marketplace_install(name: str, request: Request):
-    """Install tool dari registry (admin). Fail-closed: hash/path/validasi wajib lolos."""
-    actor = require_admin(request) or ""
+    """Install tool dari registry (vip: owner+vip)."""
+    actor = require_vip(request) or ""
     try:
         return mp.install_tool(name, actor=actor)
     except mp.MarketplaceError as e:
@@ -29,8 +29,8 @@ def marketplace_install(name: str, request: Request):
 
 @router.delete("/marketplace/{name}")
 def marketplace_uninstall(name: str, request: Request):
-    """Hapus tool terpasang + cabut grant capabilities (admin)."""
-    actor = require_admin(request) or ""
+    """Hapus tool terpasang + cabut grant capabilities (vip: owner+vip)."""
+    actor = require_vip(request) or ""
     try:
         return mp.uninstall_tool(name, actor=actor)
     except mp.MarketplaceError as e:

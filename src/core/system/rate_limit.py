@@ -1,26 +1,21 @@
 """Redis-backed rate limiter with burst + sustained limits.
 
-P2.1 — Replaces in-memory defaultdict with Redis for multi-worker support.
 Keys: rate:{scope}:{kind}:{identity}:{route}
-Uses sliding window + token bucket hybrid with TTL.
+Identitas ganda:
+- kind="ip": per IP (siapa pun, termasuk anonim).
+- kind="user": per user terautentikasi (role-aware: vip dapat limit lebih longgar).
 
-Identitas ganda (defense-in-depth):
-- kind="ip": per alamat IP (siapa pun, termasuk anonim).
-- kind="user": per user terautentikasi (dicocokkan via API key valid). Dimaksudkan
-  agar kuota mengikuti user, bukan IP — user yang sama tidak bocor lewat IP lain dan
-  satu user tidak bisa habiskan kuota berbagi IP. Dua bucket dihitung terpisah;
-  yang lebih ketat yang berlaku.
+Rate limits (per scope, per-IP default):
+- chat: burst=10/s, sustained=30/min  (vip: 20/s, 120/min bila VIP env tidak di-override)
+- tasks/jobs/approvals/feedback: burst=5/s, sustained=20/min (vip: 10/s, 60/min)
+- users: burst=2/s, sustained=5/min
+- register: burst=2/s, sustained=5/min (IP only)
+- webhooks: burst=5/s, sustained=20/min
 
-Rate limits (per scope, berlaku juga per-user bila tidak di-override):
-- /chat, /chat/stream, /chat/stream/tokens: burst=10/s, sustained=30/min
-- /tasks, /jobs, /approvals, /feedback: burst=5/s, sustained=20/min
-- /users: burst=2/s, sustained=5/min
-
-Konfigurasi via env var:
-- RATE_LIMIT_{SCOPE}_BURST: burst per second (per IP)
-- RATE_LIMIT_{SCOPE}_SUSTAINED: sustained per minute (per IP)
-- RATE_LIMIT_{SCOPE}_USER_BURST: burst per second (per user; default = per IP)
-- RATE_LIMIT_{SCOPE}_USER_SUSTAINED: sustained per minute (per user; default = per IP)
+Env:
+- RATE_LIMIT_{SCOPE}_BURST / SUSTAINED (per IP)
+- RATE_LIMIT_{SCOPE}_USER_BURST / USER_SUSTAINED (per user, default = per IP)
+- RATE_LIMIT_{SCOPE}_VIP_BURST / VIP_SUSTAINED (per vip, default = user*2 / user*4)
 """
 
 import os
@@ -105,6 +100,8 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "approvals": (5, 20),
     "feedback": (5, 20),
     "users": (2, 5),
+    "register": (2, 5),
+    "webhooks": (5, 20),
     "health": (10, 30),
     "default": (5, 20),
 }
@@ -118,6 +115,9 @@ _PATH_SCOPES: dict[str, str] = {
     "/jobs": "jobs",
     "/approvals": "approvals",
     "/feedback": "feedback",
+    "/users/register": "register",
+    "/webhooks": "webhooks",
+    "/webhooks/vip-upgrade": "webhooks",
     "/users": "users",
     "/users/bootstrap": "users",
     "/health": "health",
@@ -151,6 +151,26 @@ def _user_limits(scope: str) -> tuple[int, int]:
     return burst, sustained
 
 
+def _vip_limits(scope: str) -> tuple[int, int]:
+    """Per-vip limits: default = user*2 burst, user*4 sustained, bisa di-override VIP_*."""
+    burst, sustained = _user_limits(scope)
+    vip_burst = os.getenv(f"RATE_LIMIT_{scope.upper()}_VIP_BURST")
+    vip_sustained = os.getenv(f"RATE_LIMIT_{scope.upper()}_VIP_SUSTAINED")
+    burst = int(vip_burst) if vip_burst is not None else burst * 2
+    if vip_sustained is not None:
+        sustained = int(vip_sustained)
+    else:
+        sustained = sustained * 4 if scope in ("chat", "tasks", "jobs", "approvals", "feedback") else sustained * 2
+    return burst, sustained
+
+
+def get_limits_for_role(scope: str, role: str | None) -> tuple[int, int]:
+    """Return burst/sustained untuk role tertentu (vip vs user)."""
+    if role == "vip" or role == "owner":
+        return _vip_limits(scope)
+    return _user_limits(scope)
+
+
 def _scope_for_path(path: str) -> str | None:
     """Return rate limit scope for a path, or None if not rate-limited."""
     for prefix, scope in _PATH_SCOPES.items():
@@ -165,22 +185,11 @@ def check_rate_limit(
     burst: int | None = None,
     sustained: int | None = None,
     kind: str = "ip",
+    role: str | None = None,
 ) -> tuple[bool, dict]:
-    """Check rate limit using Redis sliding window.
-
-    Args:
-        scope: Rate limit scope (e.g. "chat", "users")
-        identity: Client identity (e.g. IP address or user id)
-        burst: Override burst limit (per second)
-        sustained: Override sustained limit (per minute)
-        kind: Identity kind — "ip" (default) atau "user". User bucket dikunci
-            terpisah dari IP bucket agar kuota mengikuti user, bukan IP.
-
-    Returns:
-        (allowed, info) where info contains limit, remaining, retry_after
-    """
+    """Check rate limit using Redis sliding window."""
     if kind == "user":
-        burst_limit, sustained_limit = _user_limits(scope)
+        burst_limit, sustained_limit = get_limits_for_role(scope, role)
     else:
         limits = _load_env_limits()
         burst_limit, sustained_limit = limits.get(scope, limits["default"])

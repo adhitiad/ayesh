@@ -3,7 +3,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.api.models import FeedbackRequest
 from src.core.auth.audit import append_audit
-from src.core.auth.auth import require_auth
+from src.core.auth.auth import require_authenticated
 from src.core.db.db_engine import get_engine
 from src.core.db.models import Feedback
 from src.core.memory.learning import learn_from_feedback
@@ -17,7 +17,7 @@ _SessionLocal = sessionmaker(bind=get_engine())
 
 @router.post("/feedback")
 def submit_feedback(req: FeedbackRequest, request: Request):
-    require_auth(request)
+    require_authenticated(request)
     request_id = generate_request_id()
     if not (1 <= req.rating <= 5):
         raise HTTPException(status_code=400, detail="rating harus 1-5")

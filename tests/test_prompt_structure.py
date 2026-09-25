@@ -1066,7 +1066,7 @@ class TestAuthRBAC(unittest.TestCase):
         """create_user accepts and stores role."""
         from src.core.auth.auth import create_user, verify_key
 
-        for role in ["owner", "admin", "user"]:
+        for role in ["owner", "vip", "user"]:
             user = create_user(f"test_{role}_new", role)
             self.assertEqual(user["role"], role)
 
@@ -1135,16 +1135,24 @@ class TestAuthRBAC(unittest.TestCase):
         self.assertEqual(cm.exception.status_code, 403)
 
     def test_require_admin_allows_admin_and_owner(self):
-        """require_admin allows admin and owner roles."""
+        """require_admin now owner-only (vip not allowed)."""
         from unittest.mock import MagicMock
+
+        from fastapi import HTTPException
 
         from src.core.auth.auth import require_admin
 
-        for user in [self.admin_user, self.owner_user]:
-            request = MagicMock()
-            request.headers.get.return_value = user["api_key"]
-            result = require_admin(request)
-            self.assertEqual(result, str(user["id"]))
+        # owner should pass
+        request = MagicMock()
+        request.headers.get.return_value = self.owner_user["api_key"]
+        result = require_admin(request)
+        self.assertEqual(result, str(self.owner_user["id"]))
+        # vip/admin should now 403
+        request = MagicMock()
+        request.headers.get.return_value = self.admin_user["api_key"]
+        with self.assertRaises(HTTPException) as cm:
+            require_admin(request)
+        self.assertEqual(cm.exception.status_code, 403)
 
     def test_require_owner_or_admin_allows_owner_of_resource(self):
         """require_owner_or_admin allows resource owner."""
@@ -1159,16 +1167,19 @@ class TestAuthRBAC(unittest.TestCase):
         self.assertEqual(result, str(self.regular_user["id"]))
 
     def test_require_owner_or_admin_allows_admin_for_any_resource(self):
-        """require_owner_or_admin allows admin for any resource."""
+        """require_owner_or_admin now only owner or self (vip not privileged)."""
         from unittest.mock import MagicMock
+
+        from fastapi import HTTPException
 
         from src.core.auth.auth import require_owner_or_admin
 
         request = MagicMock()
         request.headers.get.return_value = self.admin_user["api_key"]
 
-        result = require_owner_or_admin(request, self.owner_user["id"])
-        self.assertEqual(result, str(self.admin_user["id"]))
+        with self.assertRaises(HTTPException) as cm:
+            require_owner_or_admin(request, self.owner_user["id"])
+        self.assertEqual(cm.exception.status_code, 403)
 
     def test_require_owner_or_admin_raises_403_for_user_different_resource(self):
         """require_owner_or_admin raises 403 for user accessing different resource."""
@@ -1201,7 +1212,7 @@ class TestAuthRBAC(unittest.TestCase):
         result = bind_request_user(request)
         self.assertEqual(result, str(self.admin_user["id"]))
         self.assertEqual(get_current_user(), str(self.admin_user["id"]))
-        self.assertEqual(get_current_user_role(), "admin")
+        self.assertEqual(get_current_user_role(), "vip")
 
     def test_verify_key_rejects_invalid_key(self):
         """verify_key returns None for invalid key."""
@@ -1217,7 +1228,7 @@ class TestAuthRBAC(unittest.TestCase):
         users = list_users()
         for user in users:
             self.assertIn("role", user)
-            self.assertIn(user["role"], ["owner", "admin", "user"])
+            self.assertIn(user["role"], ["owner", "vip", "user"])
 
 
 class TestRequireAuthenticatedFailClosed(unittest.TestCase):

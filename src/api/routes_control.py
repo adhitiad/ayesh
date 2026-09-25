@@ -1,8 +1,6 @@
 """Endpoint control-plane tambahan: keyword CRUD, plans, template delete, session delete.
 
-Dipisah dari routes_system.py agar kedua file tetap dalam batas 410 baris.
-Semua endpoint di sini fail-closed: require_admin / require_authenticated
-+ require_owner, choke-point sanitize_keyword_tools, audit hash-chain.
+Semua endpoint control global (keywords/templates) hanya owner. plans/sessions owner-scoped.
 """
 
 import logging
@@ -19,7 +17,7 @@ from src.config.routing_keywords_pg import (
     sanitize_keyword_tools,
 )
 from src.core.auth.audit import append_audit
-from src.core.auth.auth import require_admin, require_authenticated, require_owner
+from src.core.auth.auth import require_authenticated, require_owner, require_vip
 from src.core.db.db_engine import get_engine
 from src.core.db.models import Plan, PlanStep, Session, SessionMemory
 from src.core.llm import templates as prompt_templates
@@ -34,8 +32,8 @@ _SessionLocal = sessionmaker(bind=get_engine())
 
 @router.post("/keywords")
 async def create_keyword(request: Request):
-    """Tambah/update keyword routing (admin). allowed_tools di-choke-point."""
-    actor = require_admin(request)
+    """Tambah/update keyword routing (vip: owner+vip)."""
+    actor = require_vip(request)
     request_id = generate_request_id()
     try:
         body = await request.json()
@@ -68,8 +66,8 @@ async def create_keyword(request: Request):
 
 @router.delete("/keywords")
 def delete_keyword(request: Request, agent: str, keyword: str):
-    """Hapus keyword routing (admin). Query params agar keyword bebas spasi."""
-    actor = require_admin(request)
+    """Hapus keyword routing (vip: owner+vip)."""
+    actor = require_vip(request)
     request_id = generate_request_id()
     agent = (agent or "").strip()
     keyword = (keyword or "").strip().lower()
@@ -200,8 +198,8 @@ def delete_session(request: Request, session_id: str):
 
 @router.delete("/templates/{name}")
 def delete_prompt_template(request: Request, name: str):
-    """Hapus template kustom (admin). Template bawaan ditolak 400."""
-    actor = require_admin(request)
+    """Hapus template kustom (vip: owner+vip). Template bawaan ditolak 400."""
+    actor = require_vip(request)
     request_id = generate_request_id()
     try:
         prompt_templates.delete_template(name)

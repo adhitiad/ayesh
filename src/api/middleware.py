@@ -71,13 +71,8 @@ def _resolve_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _authed_user_id(request: Request) -> str | None:
-    """Resolve user id dari API key valid (X-API-Key atau Bearer).
-
-    Return None bila tanpa key / key invalid / lookup gagal — request tetap
-    rate-limited per-IP. Lookup di sini reduplikasi auth endpoint agar bucket
-    per-user bisa dihitung di middleware sebelum handler jalan.
-    """
+def _authed_user_info(request: Request) -> tuple[str, str] | None:
+    """Return (user_id, role) bila API key valid, else None."""
     key = (request.headers.get("X-API-Key") or "").strip()
     if not key:
         auth_header = (request.headers.get("Authorization") or "").strip()
@@ -88,9 +83,15 @@ def _authed_user_id(request: Request) -> str | None:
     try:
         user = verify_key(key)
     except Exception:
-        # DB error tidak boleh membuat 500 di middleware; jatuh ke bucket IP saja.
         return None
-    return user["id"] if user else None
+    if not user:
+        return None
+    return user["id"], user.get("role", "user")
+
+
+def _authed_user_id(request: Request) -> str | None:
+    info = _authed_user_info(request)
+    return info[0] if info else None
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -98,14 +99,29 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         scope = _scope_for_path(request.url.path)
         if not scope:
             return await call_next(request)
-        # Per-IP selalu; per-user hanya bila API key valid (bucket terpisah).
         client_ip = _resolve_client_ip(request)
-        identities = [("ip", client_ip)]
-        user_id = _authed_user_id(request)
-        if user_id:
-            identities.append(("user", user_id))
-        for kind, identity in identities:
-            allowed, info = check_rate_limit(scope, identity, kind=kind)
+        # Per-IP selalu
+        allowed, info = check_rate_limit(scope, client_ip, kind="ip")
+        if not allowed:
+            retry_after = info.get("retry_after", 60)
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "rate_limited",
+                    "detail": "Rate limit terlampaui.",
+                    "retry_after": retry_after,
+                    "limit": info.get("limit", 0),
+                    "remaining": info.get("remaining", 0),
+                    "reason": info.get("reason", "unknown"),
+                    "bucket": f"ip:{client_ip}",
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
+        # Per-user hanya bila API key valid (role-aware untuk vip)
+        info_user = _authed_user_info(request)
+        if info_user:
+            user_id, role = info_user
+            allowed, info = check_rate_limit(scope, user_id, kind="user", role=role)
             if not allowed:
                 retry_after = info.get("retry_after", 60)
                 return JSONResponse(
@@ -117,7 +133,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                         "limit": info.get("limit", 0),
                         "remaining": info.get("remaining", 0),
                         "reason": info.get("reason", "unknown"),
-                        "bucket": f"{kind}:{identity}",
+                        "bucket": f"user:{user_id}",
                     },
                     headers={"Retry-After": str(retry_after)},
                 )

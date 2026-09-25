@@ -102,7 +102,7 @@ def _detect_encoded_suspicious(text: str) -> list[str]:
                 for word in ["import", "os.", "sys.", "exec", "eval", "subprocess", "password", "secret"]
             ):
                 suspicious.append(f"base64:{candidate[:20]}...")
-        except binascii.Error, ValueError:
+        except (binascii.Error, ValueError):
             pass
     # Deteksi hex encoded string (>=10 chars)
     hex_pattern = re.compile(r"(?:0x[0-9a-fA-F]{8,}|(?:[0-9a-fA-F]{2}){8,})")

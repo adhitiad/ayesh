@@ -7,7 +7,13 @@ from sqlalchemy.orm import sessionmaker
 
 from src.config.routing_keywords_pg import get_routing_keywords
 from src.core.auth.audit import verify_audit_chain
-from src.core.auth.auth import require_admin, require_authenticated, require_owner
+from src.core.auth.auth import (
+    require_authenticated,
+    require_owner,
+    require_owner_only,
+    require_self_or_owner,
+    require_vip,
+)
 from src.core.db.db_engine import get_engine
 from src.core.db.models import AuditLog, Feedback, LogEntry, RequestStat, Session, SessionMemory
 from src.core.llm import templates as prompt_templates
@@ -39,15 +45,17 @@ def health():
 
 
 @router.get("/metrics")
-def metrics():
+def metrics(request: Request):
+    require_vip(request)
     m = get_metrics()
     m["request_id"] = generate_request_id()
     return m
 
 
 @router.get("/metrics/prometheus")
-def metrics_prometheus():
-    """Exposure Prometheus text format 0.0.4 (tanpa dependensi prometheus_client)."""
+def metrics_prometheus(request: Request):
+    """Exposure Prometheus text format 0.0.4 — vip (owner+vip)."""
+    require_vip(request)
     return Response(
         content=render_prometheus(),
         media_type="text/plain; version=0.0.4; charset=utf-8",
@@ -56,13 +64,13 @@ def metrics_prometheus():
 
 @router.get("/analytics")
 def analytics(request: Request):
-    require_admin(request)
+    require_vip(request)
     return generate_report()
 
 
 @router.get("/audit")
 def list_audit(request: Request, limit: int = 50):
-    require_admin(request)
+    require_vip(request)
     limit = min(limit, 500)
 
     _ensure_table = lambda: None  # noqa: E731
@@ -84,20 +92,20 @@ def list_audit(request: Request, limit: int = 50):
 
 @router.get("/audit/verify")
 def verify_audit(request: Request):
-    require_admin(request)
+    require_vip(request)
     return verify_audit_chain()
 
 
 @router.get("/usage/summary")
 def usage_summary(request: Request, hours: int = 24):
-    require_admin(request)
+    require_vip(request)
     hours = min(hours, 720)  # Max 30 days
     return summarize_usage(hours=hours)
 
 
 @router.get("/usage/recent")
 def usage_recent(request: Request, limit: int = 20):
-    require_admin(request)
+    require_vip(request)
     limit = min(limit, 200)
 
     with _SessionLocal() as db:
@@ -121,15 +129,26 @@ def usage_recent(request: Request, limit: int = 20):
 
 @router.get("/usage/user/{uid}")
 def usage_by_user(request: Request, uid: str, hours: int = 24):
-    """Usage stats per-user — admin atau owner saja."""
-    require_admin(request)
+    """Usage stats per-user — self atau owner."""
+    require_self_or_owner(request, uid)
     hours = min(hours, 720)  # Max 30 days
     return summarize_user_usage(uid, hours=hours)
 
 
+@router.get("/usage/me")
+def usage_me(request: Request, hours: int = 24):
+    """Usage stats untuk diri sendiri (user/vip/owner)."""
+    from src.core.auth.auth_context import get_current_user
+
+    require_authenticated(request)
+    real_uid = get_current_user()
+    hours = min(hours, 720)
+    return summarize_user_usage(real_uid, hours=hours)
+
+
 @router.get("/templates")
 def list_prompt_templates(request: Request):
-    require_admin(request)
+    require_authenticated(request)
     return [
         {
             "name": name,
@@ -141,7 +160,7 @@ def list_prompt_templates(request: Request):
 
 @router.post("/templates")
 async def create_prompt_template(request: Request):
-    require_admin(request)
+    require_vip(request)
     try:
         body = await request.json()
     except Exception as _e:
@@ -159,7 +178,7 @@ async def create_prompt_template(request: Request):
 
 @router.get("/feedback/stats")
 def feedback_stats(request: Request):
-    require_admin(request)
+    require_owner_only(request)
     with _SessionLocal() as db:
         results = db.execute(
             select(Feedback.agent_type, func.avg(Feedback.rating), func.count()).group_by(Feedback.agent_type)
@@ -172,7 +191,7 @@ def feedback_stats(request: Request):
 
 @router.get("/feedback/recent")
 def feedback_recent(request: Request, limit: int = 10):
-    require_admin(request)
+    require_owner_only(request)
     limit = min(limit, 100)
     with _SessionLocal() as db:
         results = db.execute(select(Feedback).order_by(Feedback.created_at.desc()).limit(limit)).scalars().all()
@@ -345,7 +364,7 @@ def clear_memory(request: Request, session_id: str):
 
 @router.get("/logs")
 def get_logs(request: Request, level: str | None = None, limit: int = 50):
-    require_admin(request)
+    require_owner_only(request)
     limit = min(limit, 500)
     with _SessionLocal() as db:
         stmt = select(LogEntry).order_by(LogEntry.timestamp.desc()).limit(limit)
@@ -367,7 +386,7 @@ def get_logs(request: Request, level: str | None = None, limit: int = 50):
 
 @router.delete("/logs")
 def clear_logs(request: Request):
-    require_admin(request)
+    require_owner_only(request)
     with _SessionLocal() as db:
         db.execute(delete(LogEntry))
         db.commit()
@@ -376,7 +395,7 @@ def clear_logs(request: Request):
 
 @router.get("/keywords")
 def get_keywords(request: Request):
-    require_admin(request)
+    require_vip(request)
     request_id = generate_request_id()
     kws, default = get_routing_keywords()
     return {"keywords": kws, "default_agent": default, "request_id": request_id}

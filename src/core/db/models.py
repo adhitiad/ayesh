@@ -117,6 +117,31 @@ class User(Base):
     old_key_hash = Column(String(128), nullable=True)
     old_prefix = Column(String(20), nullable=True)
     old_key_expires_at = Column(DateTime, nullable=True)
+    # VIP: paid tier $13.87 — role=vip, metadata opsional.
+    vip_since = Column(DateTime, nullable=True)
+    vip_expires_at = Column(DateTime, nullable=True)
+    vip_ref = Column(String(100), nullable=True)
+    vip_amount_cents = Column(Integer, nullable=True)
+
+
+class VipUpgrade(Base):
+    """Idempoten webhook vip: external_ref unik, amount $13.87 + pending|sukses history."""
+
+    __tablename__ = "vip_upgrades"
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    user_id = Column(String(36), nullable=False, index=True)
+    external_ref = Column(String(100), nullable=False, unique=True, index=True)
+    amount_cents = Column(Integer, nullable=False)
+    currency = Column(String(10), nullable=False, server_default="USD")
+    status = Column(String(20), nullable=False, server_default="pending")
+    provider = Column(String(50), nullable=False, server_default="manual")
+    raw_payload = Column(Text, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
+    # Saat hak vip benar-benar diberikan oleh ref ini. NULL = dibayar belum / belum
+    # ter-apply → boleh di-upgrade. Terisi = replay tidak boleh memberi hak lagi.
+    applied_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=False, server_default="NOW()")
+    created_at = Column(DateTime, nullable=False, server_default="NOW()")
 
 
 class Preferensi(Base):

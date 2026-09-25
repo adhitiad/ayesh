@@ -10,7 +10,7 @@ from src.agents.agent_executor import run_agent_executor_stream
 from src.api.models import ChatRequest
 from src.core.auth.approval import set_current_agent_type
 from src.core.auth.audit import append_audit
-from src.core.auth.auth import require_auth
+from src.core.auth.auth import require_authenticated
 from src.core.memory.monologue import get_latest_monologue, get_role_for_agent
 from src.core.routing.adaptive_router import classify_agent
 from src.core.system.error_handling import (
@@ -29,7 +29,7 @@ router = APIRouter()
 
 @router.post("/chat/stream")
 async def chat_stream(req: ChatRequest, request: Request):
-    require_auth(request)
+    require_authenticated(request)
     session_id = req.session_id or f"api_{uuid.uuid4().hex[:8]}"
 
     async def _gen():
@@ -58,7 +58,7 @@ async def chat_stream(req: ChatRequest, request: Request):
 
 @router.post("/chat/stream/tokens")
 async def chat_stream_tokens(req: ChatRequest, request: Request):
-    require_auth(request)
+    require_authenticated(request)
     session_id = req.session_id or f"api_{uuid.uuid4().hex[:8]}"
     user_input = req.message
 
@@ -137,7 +137,7 @@ async def chat_stream_tokens(req: ChatRequest, request: Request):
 
 @router.post("/chat")
 def chat(req: ChatRequest, request: Request):
-    require_auth(request)
+    require_authenticated(request)
     session_id = req.session_id or f"api_{uuid.uuid4().hex[:8]}"
     request_id = generate_request_id()
     try:

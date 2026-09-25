@@ -124,32 +124,32 @@ class TestCreateKeyword(_DbCase):
             r = _client().post(
                 "/keywords",
                 json={"agent": "evil_agent", "keyword": "hack", "allowed_tools": ["jalankan_python"]},
-                headers=_hdr(self.admin),
+                headers=_hdr(self.owner),
             )
         self.assertEqual(r.status_code, 400)
         mock_add.assert_not_called()
 
     def test_body_kosong_400(self):
-        r = _client().post("/keywords", json={}, headers=_hdr(self.admin))
+        r = _client().post("/keywords", json={}, headers=_hdr(self.owner))
         self.assertEqual(r.status_code, 400)
 
     def test_allowed_tools_bukan_list_400(self):
         r = _client().post(
             "/keywords",
             json={"agent": "coder_agent", "keyword": "k", "allowed_tools": "tulis_kode"},
-            headers=_hdr(self.admin),
+            headers=_hdr(self.owner),
         )
         self.assertEqual(r.status_code, 400)
 
     def test_keyword_terlalu_panjang_400(self):
-        r = _client().post("/keywords", json={"agent": "coder_agent", "keyword": "x" * 101}, headers=_hdr(self.admin))
+        r = _client().post("/keywords", json={"agent": "coder_agent", "keyword": "x" * 101}, headers=_hdr(self.owner))
         self.assertEqual(r.status_code, 400)
 
     def test_body_bukan_json_400(self):
         r = _client().post(
             "/keywords",
             content=b"bukan-json",
-            headers={**_hdr(self.admin), "Content-Type": "application/json"},
+            headers={**_hdr(self.owner), "Content-Type": "application/json"},
         )
         self.assertEqual(r.status_code, 400)
 
@@ -166,7 +166,7 @@ class TestCreateKeyword(_DbCase):
                     "keyword": "  BUGFIX ",
                     "allowed_tools": ["jalankan_python", "format_disk"],
                 },
-                headers=_hdr(self.admin),
+                headers=_hdr(self.owner),
             )
         self.assertEqual(r.status_code, 200)
         body = r.json()
@@ -180,7 +180,7 @@ class TestCreateKeyword(_DbCase):
             patch("src.api.routes_control.add_keyword_with_tools", return_value=False),
             patch("src.api.routes_control.append_audit"),
         ):
-            r = _client().post("/keywords", json={"agent": "coder_agent", "keyword": "k"}, headers=_hdr(self.admin))
+            r = _client().post("/keywords", json={"agent": "coder_agent", "keyword": "k"}, headers=_hdr(self.owner))
         self.assertEqual(r.status_code, 400)
 
     def test_audit_gagal_rollback_500(self):
@@ -191,7 +191,7 @@ class TestCreateKeyword(_DbCase):
             patch("src.api.routes_control.invalidate_routing_cache") as mock_inv,
         ):
             r = _client().post(
-                "/keywords", json={"agent": "coder_agent", "keyword": "rollback-kw"}, headers=_hdr(self.admin)
+                "/keywords", json={"agent": "coder_agent", "keyword": "rollback-kw"}, headers=_hdr(self.owner)
             )
         self.assertEqual(r.status_code, 500)
         self.assertIn("rollback", r.json()["detail"].lower())
@@ -207,13 +207,13 @@ class TestDeleteKeyword(_DbCase):
             r = _client().delete(
                 "/keywords",
                 params={"agent": "ghost_agent", "keyword": "x"},
-                headers=_hdr(self.admin),
+                headers=_hdr(self.owner),
             )
         self.assertEqual(r.status_code, 400)
         mock_rm.assert_not_called()
 
     def test_param_kosong_400(self):
-        r = _client().delete("/keywords", params={"agent": "  ", "keyword": ""}, headers=_hdr(self.admin))
+        r = _client().delete("/keywords", params={"agent": "  ", "keyword": ""}, headers=_hdr(self.owner))
         self.assertEqual(r.status_code, 400)
 
     def test_tidak_ada_404(self):
@@ -224,7 +224,7 @@ class TestDeleteKeyword(_DbCase):
             r = _client().delete(
                 "/keywords",
                 params={"agent": "coder_agent", "keyword": "tak-ada"},
-                headers=_hdr(self.admin),
+                headers=_hdr(self.owner),
             )
         self.assertEqual(r.status_code, 404)
 
@@ -237,7 +237,7 @@ class TestDeleteKeyword(_DbCase):
             r = _client().delete(
                 "/keywords",
                 params={"agent": "admin_agent", "keyword": " DRAF "},
-                headers=_hdr(self.admin),
+                headers=_hdr(self.owner),
             )
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["keyword"], "draf")
@@ -250,7 +250,7 @@ class TestDeleteKeyword(_DbCase):
             patch("src.api.routes_control.invalidate_routing_cache"),
         ):
             r = _client().delete(
-                "/keywords", params={"agent": "coder_agent", "keyword": "kode"}, headers=_hdr(self.admin)
+                "/keywords", params={"agent": "coder_agent", "keyword": "kode"}, headers=_hdr(self.owner)
             )
         self.assertEqual(r.status_code, 200)
 
@@ -322,17 +322,17 @@ class TestTemplateDelete(_DbCase):
         prompt_templates.reset_templates()
 
     def test_template_bawaan_400(self):
-        r = _client().delete("/templates/ringkas", headers=_hdr(self.admin))
+        r = _client().delete("/templates/ringkas", headers=_hdr(self.owner))
         self.assertEqual(r.status_code, 400)
         self.assertIsNotNone(prompt_templates.get_template("ringkas"))
 
     def test_template_tidak_dikenal_404(self):
-        r = _client().delete("/templates/template_hilang_xyz", headers=_hdr(self.admin))
+        r = _client().delete("/templates/template_hilang_xyz", headers=_hdr(self.owner))
         self.assertEqual(r.status_code, 404)
 
     def test_template_kustom_200_lalu_hilang(self):
         prompt_templates.register_template("uji_kustom_ctrl", "halo {nama}")
-        r = _client().delete("/templates/uji_kustom_ctrl", headers=_hdr(self.admin))
+        r = _client().delete("/templates/uji_kustom_ctrl", headers=_hdr(self.owner))
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json()["ok"])
         self.assertIsNone(prompt_templates.get_template("uji_kustom_ctrl"))
@@ -340,7 +340,7 @@ class TestTemplateDelete(_DbCase):
     def test_audit_gagal_tetap_200(self):
         prompt_templates.register_template("uji_kustom_audit", "isi")
         with patch("src.api.routes_control.append_audit", side_effect=RuntimeError("chain rusak")):
-            r = _client().delete("/templates/uji_kustom_audit", headers=_hdr(self.admin))
+            r = _client().delete("/templates/uji_kustom_audit", headers=_hdr(self.owner))
         self.assertEqual(r.status_code, 200)
         self.assertIsNone(prompt_templates.get_template("uji_kustom_audit"))
 

@@ -19,6 +19,7 @@ from src.api.routes_jobs import router as jobs_router
 from src.api.routes_marketplace import router as marketplace_router
 from src.api.routes_system import router as system_router
 from src.api.routes_tasks import router as tasks_router
+from src.api.routes_webhooks import router as webhooks_router
 from src.config.rules import SUBAGENTS  # noqa: F401
 from src.core.auth.auth_guards import effective_auth_config
 from src.core.db.db_engine import get_engine  # noqa: F401
@@ -39,7 +40,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Ayesh — Multi-Agent AI Orchestrator API",
-    version="2.0",
+    version="2.1",
     description="""## Authentication
 
 Semua endpoint yang memerlukan auth mendukung **2 cara**:
@@ -54,23 +55,27 @@ X-API-Key: fr_abc123def456...
 Authorization: Bearer fr_abc123def456...
 ```
 
-> Dapatkan API key via `POST /users` (hanya owner yang bisa membuat user).
+> Register publik: `POST /users/register` → role=user (api_key sekali tampil).
+> VIP $13.87: `POST /webhooks/vip-upgrade` (HMAC, idempotent) → role=vip.
 
 ## Roles
-- **owner**: full access (users, jobs, approvals, logs, audit, analytics)
-- **admin**: operational (tasks, sessions, memory, chat, jobs, tasks)
-- **user**: chat, own sessions, own jobs, own tasks, own feedback
+- **owner**: full — user manage (`GET /users`, `POST /users`, `DELETE /users/{id}`, `POST .../rotate`, `POST/DELETE .../vip`) + semua vip + semua self
+- **vip**: paid $13.87/bulan — global (`keywords`, `templates`, `marketplace`, `audit`, `analytics`, `usage global`, `metrics`) + model manage self + premium models (`VIP_ONLY_MODELS`) + kuota longgar (`VIP_BURST/SUSTAINED`)
+- **user**: chat, own sessions/memory/tasks/plans, own llm/mcp/skill configs, own usage (`/usage/me` self), katalog read; tidak dapat global vip
+
+User manage hanya owner, model manage self/owner, global hanya vip (owner+vip).
 """,
     lifespan=lifespan,
     openapi_tags=[
         {"name": "Chat", "description": "Chat dengan AI agent"},
-        {"name": "Users", "description": "Manajemen user & API key"},
+        {"name": "Users", "description": "Manajemen user & API key (register/vip)"},
         {"name": "Jobs", "description": "Scheduled jobs (interval/harian)"},
         {"name": "Tasks", "description": "Async task queue"},
         {"name": "Sessions", "description": "Session & memory management"},
         {"name": "Feedback", "description": "Feedback & learning"},
         {"name": "System", "description": "Health, metrics, audit, logs"},
         {"name": "Approvals", "description": "Human-in-the-loop approvals"},
+        {"name": "Webhooks", "description": "VIP webhook (HMAC)"},
     ],
 )
 
@@ -132,6 +137,11 @@ app.include_router(approvals_router)
 app.include_router(marketplace_router)
 app.include_router(system_router)
 app.include_router(control_router)
+app.include_router(webhooks_router)
+
+from src.api.routes_billing import router as billing_router  # noqa: E402
+
+app.include_router(billing_router)
 
 if __name__ == "__main__":
     import uvicorn

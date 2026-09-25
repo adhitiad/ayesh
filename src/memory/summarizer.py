@@ -55,7 +55,7 @@ class SummaryConfig:
                 hierarchical=summary_cfg.get("hierarchical", True),
                 max_levels=summary_cfg.get("max_levels", 3),
             )
-        except json.JSONDecodeError, TypeError:
+        except (json.JSONDecodeError, TypeError):
             return cls()
 
     def to_context_dict(self) -> dict:
@@ -83,7 +83,7 @@ def update_summary_config(session_id: str, cfg: SummaryConfig) -> None:
         if row:
             try:
                 existing = json.loads(row)
-            except json.JSONDecodeError, TypeError:
+            except (json.JSONDecodeError, TypeError):
                 existing = {}
         existing.update(cfg.to_context_dict())
         db.execute(Session.__table__.update().where(Session.id == session_id).values(context=json.dumps(existing)))

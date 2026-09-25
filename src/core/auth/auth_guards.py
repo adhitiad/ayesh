@@ -1,10 +1,15 @@
-"""Authorization guards: require_auth, require_owner, require_admin, etc."""
+"""Authorization guards: require_auth, require_owner, require_admin, etc.
+
+Roles: owner (full) | vip (paid $13.87 — same API as user, higher quota + premium models) | user.
+Semua control-plane global hanya owner. vip tidak punya hak admin.
+"""
 
 from fastapi import HTTPException, Request
 
 from src.core.auth.auth_context import (
     get_current_user_role,
     is_authenticated,
+    vip_expires_active,
 )
 from src.core.auth.auth_request import bind_request_user
 
@@ -65,20 +70,42 @@ def require_owner(request: Request, resource_owner_id: str) -> str:
 
 
 def require_admin(request: Request) -> str:
-    """Require admin or owner role. Returns user_id. Raises 403 if insufficient privileges."""
-    user_id = require_authenticated(request)
-    role = get_current_user_role()
-    if role not in ("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Forbidden: admin or owner role required")
-    return user_id
+    """Deprecated alias for require_owner_only — admin role diganti vip, tidak dipakai lagi."""
+    return require_owner_only(request)
 
 
 def require_owner_only(request: Request) -> str:
-    """Require owner role ONLY (not admin). Returns user_id. Raises 403 if not owner."""
+    """Require owner role ONLY (not admin/vip). Returns user_id. Raises 403 if not owner."""
     user_id = require_authenticated(request)
     role = get_current_user_role()
     if role != "owner":
         raise HTTPException(status_code=403, detail="Forbidden: owner role required")
+    return user_id
+
+
+def require_vip(request: Request) -> str:
+    """Require vip or owner (untuk premium gate). vip == paid user, bukan admin.
+
+    Masa aktif dicek dua lapis: verify_key sudah menurunkan role bila kedaluwarsa,
+    dan ContextVar di sini menutup celah bila role vip diset tanpa verify_key.
+    """
+    user_id = require_authenticated(request)
+    role = get_current_user_role()
+    if role not in ("vip", "owner"):
+        raise HTTPException(status_code=403, detail="Forbidden: vip or owner role required")
+    if role == "vip" and not vip_expires_active():
+        raise HTTPException(status_code=403, detail="Forbidden: masa aktif vip habis")
+    return user_id
+
+
+def require_self_or_owner(request: Request, uid: str) -> str:
+    """Allow self atau owner. vip/user tidak bisa lihat data orang lain."""
+    user_id = require_authenticated(request)
+    role = get_current_user_role()
+    if role == "owner":
+        return user_id
+    if user_id != uid:
+        raise HTTPException(status_code=403, detail="Forbidden: not owner nor self")
     return user_id
 
 
@@ -99,10 +126,10 @@ def bootstrap_owner() -> dict | None:
 
 
 def require_owner_or_admin(request: Request, resource_owner_id: str) -> str:
-    """Require owner of resource OR admin/owner role. Returns user_id. Raises 403 if neither."""
+    """Deprecated: dulu admin/owner boleh lihat resource. Kini hanya owner atau pemilik resource."""
     user_id = require_authenticated(request)
     role = get_current_user_role()
-    if role in ("admin", "owner"):
+    if role == "owner":
         return user_id
     if user_id != resource_owner_id:
         raise HTTPException(status_code=403, detail="Forbidden: not resource owner")

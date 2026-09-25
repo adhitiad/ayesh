@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 current_user: ContextVar[str] = ContextVar("current_user", default="default")
 current_user_role: ContextVar[str] = ContextVar("current_user_role", default="user")
 _authenticated: ContextVar[bool] = ContextVar("auth_authenticated", default=False)
+# Masa aktif vip request berjalan (None = bukan vip / tanpa batas). Dipakai require_vip
+# sebagai pemeriksaan kedua (fail-closed) di samping normalisasi role di verify_key.
+current_user_vip_expires: ContextVar[datetime | None] = ContextVar("current_user_vip_expires", default=None)
 
 
 @dataclass
@@ -53,6 +56,31 @@ def set_current_user_role(role: str) -> None:
 
 def get_current_user_role() -> str:
     return current_user_role.get() or "user"
+
+
+def set_current_user_vip_expires(value: datetime | None) -> None:
+    current_user_vip_expires.set(value)
+
+
+def get_current_user_vip_expires() -> datetime | None:
+    return current_user_vip_expires.get()
+
+
+def vip_expires_active() -> bool:
+    """True bila masa aktif vip request berjalan belum lewat.
+
+    None (tanpa batas / bukan vip) dianggap aktif — keputusan role tetap di
+    require_vip; fungsi ini hanya penjaga kedua agar expired tidak lolos.
+    """
+    expires = current_user_vip_expires.get()
+    if expires is None:
+        return True
+    try:
+        now = datetime.now(UTC).replace(tzinfo=None)
+        return expires > now
+    except Exception:
+        # gagal komparasi = masa aktif tidak terbukti → fail-closed
+        return False
 
 
 def get_current_user_id() -> str:

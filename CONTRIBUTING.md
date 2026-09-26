@@ -27,7 +27,7 @@ Terima kasih sudah mau berkontribusi! Proyek ini adalah orkestrator multi-agent 
 ## Tes wajib sebelum PR
 
 ```bash
-# Cepat, tanpa LLM/infra — wajib lolos tiap ubah prompt (454 tes):
+# Cepat, tanpa LLM/infra — wajib lolos tiap ubah prompt (684 tes):
 python -m unittest discover -s tests
 
 # End-to-end 29 kasus (butuh PG + Redis + LLM):

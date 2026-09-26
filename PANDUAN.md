@@ -13,6 +13,57 @@ Panduan pakai sehari-hari (Bahasa Indonesia). Untuk dokumentasi developer, baca 
 
 Jalankan server: `python api_server.py` (butuh PostgreSQL + Redis jalan).
 
+## Login & Keamanan Akun
+
+Akun manusia berbeda dari API key: login pakai email + password (atau OAuth), sesi disimpan
+di cookie web (`ayesh_session`), dan bisa dilindungi 2FA.
+
+### Daftar akun
+```bash
+curl -X POST http://localhost:8080/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"budi@mail.com","password":"rahasia123","name":"Budi"}'
+```
+- Email wajib diverifikasi dulu sebelum bisa login (`AUTH_REQUIRE_EMAIL_VERIFICATION=1`).
+- Link verifikasi dikirim via SMTP. Mode dev tanpa SMTP (`AUTH_DEV_VERIFY=1`) menampilkan
+  link langsung di respons — **jangan dipakai di produksi**.
+- Kalau kirim email gagal, register membalas **503** (fail-closed): akun belum aktif, ulangi nanti.
+
+### Verifikasi email
+- Buka link dari email, atau manual: `POST /auth/email/verify {"token": "..."}`.
+- Belum dapat email? `POST /auth/email/verify/request {"email":"budi@mail.com"}` (kirim ulang).
+
+### Login
+```bash
+curl -X POST http://localhost:8080/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"budi@mail.com","password":"rahasia123"}'
+```
+- Sukses → cookie `ayesh_session` (+ `ayesh_csrf`) terpasang; kirim cookie itu di request berikutnya,
+  dan header `X-CSRF-Token` untuk semua aksi ubah/hapus.
+- Punya 2FA? Respons berisi `challenge` → lanjut: `POST /auth/login/2fa {"challenge":"...","code":"6 digit"}`.
+
+### Lupa password
+1. `POST /auth/password/reset {"email":"budi@mail.com"}` → link reset dikirim ke email.
+2. `POST /auth/password/reset/confirm {"token":"...","new_password":"kataBaru123"}`.
+
+### Ganti password (sudah login)
+`POST /auth/password/change {"current_password":"...","new_password":"..."}`.
+
+### Aktifkan 2FA (TOTP, disarankan)
+1. `POST /auth/2fa/setup` → dapat secret/QR → masukkan ke Google Authenticator/Authy/dll.
+2. `POST /auth/2fa/confirm {"code":"123456"}` → dapat **10 backup code** (sekali pakai, simpan offline).
+3. Login berikutnya butuh kode dari aplikasi: `POST /auth/login/2fa`.
+4. Matikan: `POST /auth/2fa/disable {"password":"..."}`. Status: `GET /auth/2fa/status`.
+
+### Login pakai Google / GitHub
+`GET /auth/oauth/google` atau `GET /auth/oauth/github` → halaman provider → kembali otomatis
+ke situs dengan sesi terpasang. Bila email OAuth belum terverifikasi di provider, sistem
+menolak (fail-closed) — verifikasi dulu di akun Google/GitHub Anda.
+
+### Keluar
+`POST /auth/logout` → cookie dibersihkan (aman dipanggil berulang).
+
 ## Skill (perintah `/nama`)
 
 Ketik `/nama-skill` + pesan. Contoh:

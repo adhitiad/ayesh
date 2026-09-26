@@ -48,6 +48,13 @@ Authorization: Bearer fr_abc123...
 | **Publik** | `GET /health` `src/api/routes_system.py:25` | **none** | tetap publik |
 |  | `POST /users/register` `src/api/routes_agents.py` | **none** + `register` scope RL | selalu `role=user` |
 |  | `POST /webhooks/vip-upgrade` `src/api/routes_webhooks.py:40` | **HMAC** (`VIP_WEBHOOK_SECRET`) | fail-closed 503 bila secret kosong |
+| **Publik — akun web** | `POST /auth/register` `src/api/routes_auth.py:108` | **none** + RL scope `register` (2/s, 5/min IP) | selalu `role=user`; 400 bila email terdaftar (W9 → 409 + `hint_provider`) |
+|  | `POST /auth/login`, `POST /auth/login/2fa` `routes_auth.py:134,162` | **none** + RL scope `auth` (5/20) | sukses → cookie `ayesh_session` + `ayesh_csrf` |
+|  | `POST /auth/logout` `routes_auth.py:184` | cookie opsional | clear cookie (idempoten) |
+|  | `POST /auth/email/verify[/request]`, `POST /auth/password/reset[/confirm]` `routes_auth.py:206-237` | token sekali-pakai (hashed) | register gagal kirim email → **503 fail-closed** |
+|  | `GET /auth/oauth/{provider}` + `/callback` `routes_auth.py:331,342` | state `auth_oauth_states` TTL 10 mnt | Google/GitHub; error → redirect `/?auth=error` |
+| **Authenticated — akun web** | `GET /auth/me`, `POST /auth/password/change` `routes_auth.py:196,251` | `require_authenticated` + CSRF (`X-CSRF-Token`) bila cookie |  |
+|  | `GET /auth/2fa/status`, `POST /auth/2fa/{setup,confirm,disable}` `routes_auth.py:268-310` | `require_authenticated` + CSRF | TOTP pyotp + 10 backup code sekali pakai |
 | **Authenticated read (user/vip/owner)** | `POST /chat`, `POST /chat/stream*` `routes_chat.py:30-139` | `require_authenticated` | dulunya `require_auth` |
 |  | `POST /feedback` `routes_feedback.py:19` | `require_authenticated` |  |
 |  | `GET /agents`, `GET /skills`, `GET /skills/{name}` `routes_agents.py:49-82` | `require_authenticated` | katalog, filter `disabled_*` per-user |

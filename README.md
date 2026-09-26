@@ -29,6 +29,16 @@ curl -X POST http://127.0.0.1:8080/chat \
   -d '{"message": "buatkan file hello.py"}'
 ```
 
+## Endpoint utama
+
+| Kelompok | Rute |
+| --- | --- |
+| Chat & streaming | `POST /chat`, `POST /chat/stream`, `POST /chat/stream/tokens` |
+| Akun manusia | `POST /auth/register`, `POST /auth/login`, `POST /auth/login/2fa`, `POST /auth/logout`, `GET /auth/me`, verifikasi email (`/auth/email/verify[/request]`), reset & ganti password (`/auth/password/*`), 2FA (`/auth/2fa/*`), OAuth (`/auth/oauth/{provider}` + `/callback`) |
+| Billing & webhook | `GET /billing/history`, `GET /billing/history/{external_ref}`, `GET /billing/status/{external_ref}`, `POST /webhooks/vip-upgrade` |
+| Control-plane | `POST/GET/DELETE /users`, `/jobs`, `/tasks`, `/approvals`, `/keywords`, `/marketplace`, `GET /plans` |
+| Observability | `GET /health`, `/metrics`, `/metrics/prometheus`, `/analytics`, `/usage/summary`, `/audit` |
+
 ## Struktur proyek
 
 | Path | Isi |
@@ -37,14 +47,14 @@ curl -X POST http://127.0.0.1:8080/chat \
 | `api_server.py` | REST API + SSE streaming |
 | `bootstrap.py` | Bootstrap (pengganti `setup.py`): cek prasyarat, install deps, buat `.env`, buat tabel |
 | `src/core/routing/` | Routing engine, intent detection, skill parsing, fan-out, tool filtering, commands |
-| `src/core/auth/` | Multi-user API keys, HITL approval, audit hash-chain |
+| `src/core/auth/` | Multi-user API keys, auth web (register/login/verifikasi email/reset/2FA TOTP/OAuth Google+GitHub/sesi cookie+CSRF), HITL approval, audit hash-chain |
 | `src/core/observability/` | Logging, metrics, analytics, usage tracking |
 | `src/core/db/` | Database engine, ORM models, centralized connect |
 | `src/core/llm/` | LLM shortcut, text normalizer |
 | `src/core/memory/` | Learning, monologue, session helpers |
 | `src/core/scheduler/` | Scheduled jobs, async task queue |
 | `src/core/system/` | Sysinfo, workspaces, rate limiter, error handling, Redis patch |
-| `src/api/` | FastAPI routes (chat, feedback, agents, jobs, tasks, approvals, system) + models + middleware |
+| `src/api/` | FastAPI routes (chat, auth, billing, webhooks, feedback, agents, jobs, tasks, approvals, system) + models + middleware |
 | `src/cli/` | CLI demo entry point (`python -m src.cli.demo`) |
 | `src/agents/` | LangGraph eksekutor + LLM multi-provider config |
 | `src/mcp_core/` | Registry prompt, skills, RAG, tool validation, MCP client |
@@ -54,7 +64,7 @@ curl -X POST http://127.0.0.1:8080/chat \
 | `src/config/` | Rules, routing keywords (DB-backed) |
 | `src/ops/` | Backup/restore, data retention |
 | `.ayesh/` | Skill & SOP markdown (install via `install_agents.py`) |
-| `tests/` | 454 tes (cepat) + eval end-to-end + security regression |
+| `tests/` | 684 tes (cepat) + eval end-to-end + security regression |
 
 ## Dokumentasi
 
@@ -65,7 +75,7 @@ curl -X POST http://127.0.0.1:8080/chat \
 ## Tes & Linting
 
 ```bash
-python -m unittest discover -s tests   # 454 tes cepat, wajib lolos tiap ubah prompt
+python -m unittest discover -s tests   # 684 tes cepat, wajib lolos tiap ubah prompt
 ruff check .                            # linting (config di .ruff.toml)
 python -m tests.run_eval               # end-to-end (butuh PG + Redis + LLM)
 ```

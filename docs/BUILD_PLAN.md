@@ -73,12 +73,20 @@
 - `vip_upgrades.applied_at` + backfill `COALESCE(applied_at, paid_at, created_at)`; webhook short-circuit `already` hanya bila `applied_at IS NOT NULL`; `paid_at` tidak ditimpa saat replay; **ref baru saat masih vip = perpanjangan +30d**.
 - `tests/test_vip_expiry.py` 9 test → **617 OK**.
 
+### 13. Auth web P1 — akun manusia (email/password + OAuth + 2FA + sesi) ✔
+- 16 endpoint `src/api/routes_auth.py` (prefix `/auth`): `POST /register`, `POST /login`, `POST /login/2fa`, `POST /logout`, `GET /me`, `POST /email/verify[/request]`, `POST /password/reset[/confirm]`, `POST /password/change`, `GET/POST /2fa/{status,setup,confirm,disable}`, `GET /oauth/{provider}` + `/callback` (Google & GitHub).
+- Modul baru `src/core/auth/`: `account.py` (register/authenticate/verifikasi/reset/2FA lifecycle/auto-link OAuth — fail-closed email provider belum terverifikasi), `auth_db.py` (lazy `_ensure_auth_columns`), `emailer.py` (aiosmtplib; gagal kirim saat register → **503**), `oauth.py` (state `auth_oauth_states` TTL 10 mnt), `passwords.py` (Argon2id + policy min 8), `sessions.py` (cookie `ayesh_session` HttpOnly + CSRF double-submit `ayesh_csrf` → `X-CSRF-Token`), `totp.py` (pyotp + 10 backup code sekali pakai).
+- Integrasi: `middleware.py` (baca sesi/CSRF utk mutasi cookie-based), `rate_limit.py` scope `auth` (5/20) + `register` (2/s, 5/min IP-only), `prometheus_metrics.py` counter `ayesh_auth_events_total{event,outcome}`, `models.py` kolom auth di `users`, `api_server.py` registrasi router auth/billing/webhooks → OpenAPI **74 path** (20 = auth/billing/webhooks).
+- `.env.example`: `AUTH_*` (cookie/verifikasi/password), `SMTP_*`, `AUTH_GOOGLE_CLIENT_ID/SECRET`, `AUTH_GITHUB_CLIENT_ID/SECRET`, `CORS_ORIGINS`.
+- Tests: 6 file baru (`test_auth_account`, `test_auth_passwords`, `test_auth_sessions`, `test_auth_totp`, `test_auth_observability`, `test_routes_auth`) → **684 OK**; `ruff check .` clean; `bandit -r src/` 0 issue; mypy baseline 21 error (2026-09-26, mypy 2.3.1).
+
 ## Verifikasi tiap fase
-- `compileall -q src api_server.py`, `ruff check .` **All checks passed**, `unittest discover -s tests` **617 OK**, `go vet ./...` + `go test ./...` 5 PASS.
+- `compileall -q src api_server.py`, `ruff check .` **All checks passed**, `unittest discover -s tests` **617 OK** (fase 12), `go vet ./...` + `go test ./...` 5 PASS.
+- Gate terkini (fase 13, 2026-09-26): `unittest` **684 OK**, `ruff` clean, `bandit` **0 issue**, boot `api_server` **74 path** OpenAPI.
 - E2E smoke live: register `role=user` → create `pending` → `vip_active=false` → callback `success` → `role=vip` +30d → `billing/history` 1 row, IDOR 403, replay idempoten (expires tidak extend).
 
 ## File diubah
 - `src/core/db/models.py`, `src/core/auth/*`, `src/api/*`, `src/core/system/rate_limit.py`, `src/core/llm/premium.py`, `api_server.py`, `.env.example`, `tests/*`, `docs/*`.
 
 ---
-*Plan-mode → build-mode — eksekusi 1→12 berurutan, fail-closed, tidak breaking selain `admin→vip` & `metrics` owner→vip (disetujui).*
+*Plan-mode → build-mode — eksekusi 1→13 berurutan, fail-closed, tidak breaking selain `admin→vip` & `metrics` owner→vip (disetujui).*

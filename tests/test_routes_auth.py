@@ -7,7 +7,8 @@ test 2FA/CSRF tidak flaky. Baris user/auth dibersihkan di tearDown.
 import os
 import unittest
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import pyotp
 from fastapi.testclient import TestClient
@@ -70,6 +71,56 @@ def _register_verified(client: TestClient, email: str, password: str | None = No
     r = client.post("/auth/email/verify", json={"token": token})
     assert r.status_code == 200, r.text
     return account
+
+
+# --- helper OAuth success path (mock httpx) ---------------------------------
+
+_OAUTH_ENABLED_ENV = {
+    "AUTH_OAUTH_GOOGLE_CLIENT_ID": "gid-unit",
+    "AUTH_OAUTH_GOOGLE_CLIENT_SECRET": "gsec-unit",
+}
+
+
+class _FakeResp:
+    def __init__(self, payload: dict):
+        self._payload = payload
+        self.status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeAsyncClient:
+    """Pengganti httpx.AsyncClient: POST /token → access_token, GET userinfo → `userinfo`."""
+
+    userinfo: dict = {}
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, *args, **kwargs):
+        return _FakeResp({"access_token": "unit-token"})
+
+    async def get(self, *args, **kwargs):
+        return _FakeResp(type(self).userinfo)
+
+
+def _oauth_state(client: TestClient, provider: str = "google") -> str:
+    """Mulai OAuth via route → state asli yang tersimpan di auth_oauth_states."""
+    resp = client.get(f"/auth/oauth/{provider}", follow_redirects=False)
+    assert resp.status_code == 302, resp.text
+    query = parse_qs(urlparse(resp.headers["location"]).query)
+    assert "state" in query, resp.headers["location"]
+    return query["state"][0]
 
 
 class TestRegisterLoginMeLogout(unittest.TestCase):
@@ -244,6 +295,127 @@ class TestOAuthRoutes(unittest.TestCase):
         resp = client.get("/auth/oauth/google/callback", follow_redirects=False)
         self.assertEqual(resp.status_code, 302)
         self.assertIn("reason=missing_params", resp.headers["location"])
+
+
+class TestOAuthSuccessPath(unittest.TestCase):
+    """Callback sukses dengan httpx mock: buat user + sesi cookie; kasus link akun lama."""
+
+    def test_callback_creates_user_and_session(self):
+        client = _client()
+        email = _email()
+        with (
+            patch.dict(os.environ, _OAUTH_ENABLED_ENV),
+            patch("src.core.auth.oauth.httpx.AsyncClient", _FakeAsyncClient),
+        ):
+            _FakeAsyncClient.userinfo = {
+                "sub": f"g-{uuid.uuid4().hex[:8]}",
+                "email": email,
+                "email_verified": True,
+                "name": "OAuth Baru",
+            }
+            state = _oauth_state(client)
+            cb = client.get(
+                f"/auth/oauth/google/callback?code=unit-code&state={state}",
+                follow_redirects=False,
+            )
+        self.assertEqual(cb.status_code, 302, cb.text)
+        self.assertIn("auth=ok", cb.headers["location"])
+        self.assertTrue(any("ayesh_session=" in c for c in cb.headers.get_list("set-cookie")))
+
+        with get_session() as db:
+            row = db.query(User).filter(User.email == email).first()
+            self.assertIsNotNone(row)
+            _KNOWN_UIDS.append(str(row.id))
+            self.assertTrue(row.email_verified)
+            self.assertEqual(row.auth_provider, "google")
+            self.assertEqual(row.oauth_provider_id, _FakeAsyncClient.userinfo["sub"])
+
+        me = client.get("/auth/me")
+        self.assertEqual(me.status_code, 200, me.text)
+        self.assertEqual(me.json()["email"], email)
+
+    def test_callback_links_existing_account(self):
+        client = _client()
+        email = _email()
+        _register_verified(client, email)
+        login = client.post("/auth/login", json={"email": email, "password": _PW})
+        self.assertEqual(login.status_code, 200, login.text)
+
+        with (
+            patch.dict(os.environ, _OAUTH_ENABLED_ENV),
+            patch("src.core.auth.oauth.httpx.AsyncClient", _FakeAsyncClient),
+        ):
+            _FakeAsyncClient.userinfo = {
+                "sub": "g-linked-1",
+                "email": email,
+                "email_verified": True,
+                "name": "OAuth Link",
+            }
+            state = _oauth_state(client)
+            cb = client.get(
+                f"/auth/oauth/google/callback?code=unit-code&state={state}",
+                follow_redirects=False,
+            )
+        self.assertEqual(cb.status_code, 302, cb.text)
+        self.assertIn("auth=ok", cb.headers["location"])
+
+        me = client.get("/auth/me")
+        self.assertEqual(me.status_code, 200, me.text)
+        self.assertEqual(me.json()["email"], email)
+
+        with get_session() as db:
+            row = db.query(User).filter(User.email == email).first()
+            self.assertIsNotNone(row)
+            self.assertEqual(row.auth_provider, "google")
+            self.assertEqual(row.oauth_provider_id, "g-linked-1")
+            self.assertTrue(row.email_verified)
+
+
+class TestRegisterEmailSendFailure(unittest.TestCase):
+    """SMTP aktif: kirim email gagal → 503 fail-closed, akun tetap belum terverifikasi."""
+
+    _SMTP_ENV = {
+        "SMTP_ENABLED": "1",
+        "SMTP_HOST": "smtp.test.local",
+        "SMTP_USER": "unit@test.local",
+        "SMTP_PASSWORD": "pw-unit",
+        "SMTP_STARTTLS": "0",
+    }
+
+    def test_register_503_and_account_stays_unverified(self):
+        client = _client()
+        email = _email()
+        with (
+            patch.dict(os.environ, self._SMTP_ENV),
+            patch(
+                "src.api.routes_auth.send_email",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("smtp down"),
+            ),
+        ):
+            resp = client.post("/auth/register", json={"email": email, "password": _PW, "name": "X"})
+        self.assertEqual(resp.status_code, 503, resp.text)
+        self.assertIn("email verifikasi gagal", resp.json()["detail"])
+
+        with get_session() as db:
+            row = db.query(User).filter(User.email == email).first()
+            self.assertIsNotNone(row)
+            _KNOWN_UIDS.append(str(row.id))
+            self.assertFalse(row.email_verified)
+
+        login = client.post("/auth/login", json={"email": email, "password": _PW})
+        self.assertEqual(login.status_code, 403, login.text)
+
+    def test_register_201_when_smtp_ok(self):
+        client = _client()
+        email = _email()
+        mock_send = AsyncMock(return_value=True)
+        with patch.dict(os.environ, self._SMTP_ENV), patch("src.api.routes_auth.send_email", new=mock_send):
+            resp = client.post("/auth/register", json={"email": email, "password": _PW, "name": "X"})
+        self.assertEqual(resp.status_code, 201, resp.text)
+        _KNOWN_UIDS.append(resp.json()["account"]["id"])
+        self.assertEqual(mock_send.await_count, 1)
+        self.assertFalse(resp.json()["account"]["email_verified"])
 
 
 class TestRateLimitAuthScope(unittest.TestCase):

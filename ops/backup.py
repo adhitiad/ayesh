@@ -27,6 +27,18 @@ TABLES = [
     "pending_approvals",
     "audit_log",
     "request_stats",
+    # Data identitas & uang (ditambahkan 2026-09 — sebelumnya tidak ikut backup)
+    "users",
+    "vip_upgrades",
+    "auth_sessions",
+    "auth_tokens",
+    "auth_oauth_states",
+    "user_llm_configs",
+    "user_skill_overrides",
+    "user_mcp_overrides",
+    "plans",
+    "plan_steps",
+    "monologues",
 ]
 
 

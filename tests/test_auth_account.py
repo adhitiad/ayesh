@@ -62,8 +62,8 @@ def _email() -> str:
     return f"u{uuid.uuid4().hex[:12]}@test.local"
 
 
-def _register(email=None, password=None, name="Test User"):
-    result = register_with_password(email or _email(), password or _PW, name)
+def _register(email=None, password=None, name="Test User", username=None):
+    result = register_with_password(email or _email(), password or _PW, name, username=username)
     _KNOWN_UIDS.append(result["account"]["id"])
     return result
 
@@ -241,16 +241,26 @@ class TestOAuthLink(unittest.TestCase):
             "provider_user_id": "g1",
             "email": f"g{uuid.uuid4().hex[:8]}@test.local",
             "name": "OAuth",
+            "email_verified": True,
         }
         user = link_oauth_identity(profile)
         self.assertIsNotNone(user["id"])
         _KNOWN_UIDS.append(user["id"])
-        email2 = get_account(user["id"])["email"]
-        self.assertEqual(email2, profile["email"])
+        account = get_account(user["id"])
+        self.assertEqual(account["email"], profile["email"])
+        # W9a: akun OAuth baru otomatis dapat username = local-part email
+        self.assertEqual(account["username"], profile["email"].split("@")[0])
+        self.assertEqual(account["connected_providers"], ["google"])
 
     def test_same_provider_id_persists(self):
         email = _email()
-        profile = {"provider": "github", "provider_user_id": "gh_1", "email": email, "name": "Gh"}
+        profile = {
+            "provider": "github",
+            "provider_user_id": "gh_1",
+            "email": email,
+            "name": "Gh",
+            "email_verified": True,
+        }
         user1 = link_oauth_identity(profile)
         _KNOWN_UIDS.append(user1["id"])
         user2 = link_oauth_identity(dict(profile, email=f"other-{email}"))
@@ -258,19 +268,117 @@ class TestOAuthLink(unittest.TestCase):
 
     def test_email_in_use_by_other_provider(self):
         email = _email()
-        first = link_oauth_identity({"provider": "google", "provider_user_id": "g2", "email": email, "name": "X"})
+        first = link_oauth_identity(
+            {"provider": "google", "provider_user_id": "g2", "email": email, "name": "X", "email_verified": True}
+        )
         _KNOWN_UIDS.append(first["id"])
-        with self.assertRaises(ValueError):
-            link_oauth_identity({"provider": "github", "provider_user_id": "gh2", "email": email, "name": "G"})
+        with self.assertRaises(ValueError) as ctx:
+            link_oauth_identity(
+                {"provider": "github", "provider_user_id": "gh2", "email": email, "name": "G", "email_verified": True}
+            )
+        self.assertEqual(str(ctx.exception), "email_in_use")
 
     def test_link_to_existing_password_user(self):
         email = _email()
         result = _register(email=email)
         _KNOWN_UIDS.append(result["account"]["id"])
-        user = link_oauth_identity({"provider": "google", "provider_user_id": "g3", "email": email, "name": "Link"})
+        user = link_oauth_identity(
+            {"provider": "google", "provider_user_id": "g3", "email": email, "name": "Link", "email_verified": True}
+        )
         self.assertEqual(user["id"], result["account"]["id"])
         account = get_account(user["id"])
         self.assertTrue(account["email_verified"])
+        self.assertEqual(account["connected_providers"], ["google"])
+
+
+class TestUsernameRegister(unittest.TestCase):
+    """W9a/b: username — auto dari local-part, normalisasi, validasi, duplikat, login by username."""
+
+    def test_auto_username_from_local_part(self):
+        local = f"auto{uuid.uuid4().hex[:8]}"
+        result = _register(email=f"{local}@test.local")
+        self.assertEqual(result["account"]["username"], local)
+
+    def test_explicit_username_normalized(self):
+        result = _register(username="  Mixed.User ")
+        self.assertEqual(result["account"]["username"], "mixed.user")
+
+    def test_username_invalid_rejected(self):
+        for bad in ("ab", "bad name", "user@x", "x" * 33):
+            with self.assertRaises(ValueError, msg=bad):
+                _register(username=bad)
+
+    def test_username_duplicate_rejected(self):
+        _register(username="dupcheckuser")
+        with self.assertRaises(ValueError):
+            _register(username="DUPCHECKUSER")
+
+    def test_auto_username_collision_gets_suffix(self):
+        base = f"coll{uuid.uuid4().hex[:8]}"
+        first = _register(email=f"{base}@one.test")
+        second = _register(email=f"{base}@two.test")
+        self.assertEqual(first["account"]["username"], base)
+        self.assertEqual(second["account"]["username"], f"{base}-2")
+
+    def test_login_by_username_identifier(self):
+        email = _email()
+        uname = f"log{uuid.uuid4().hex[:8]}"
+        result = _register(email=email, username=uname)
+        confirm_email_verification(result["email_verify_token"])
+        uid, err = authenticate_password(uname, _PW)
+        self.assertIsNone(err)
+        uid2, err2 = authenticate_password(uname.upper(), _PW)
+        self.assertIsNone(err2)
+        self.assertEqual(uid, uid2)
+        uid3, err3 = authenticate_password(email, _PW)
+        self.assertIsNone(err3)
+        self.assertEqual(uid, uid3)
+
+
+class TestOAuthEmailVerifiedGate(unittest.TestCase):
+    """W9d: profil OAuth dengan email_verified=false/tanpa kunci → tolak fail-closed."""
+
+    def test_reject_unverified_auto_link(self):
+        email = _email()
+        result = _register(email=email)
+        with self.assertRaises(ValueError) as ctx:
+            link_oauth_identity(
+                {
+                    "provider": "google",
+                    "provider_user_id": f"gu-{uuid.uuid4().hex[:8]}",
+                    "email": email,
+                    "name": "X",
+                    "email_verified": False,
+                }
+            )
+        self.assertEqual(str(ctx.exception), "email_unverified")
+        account = get_account(result["account"]["id"])
+        self.assertEqual(account["auth_provider"], "password")
+        self.assertEqual(account["connected_providers"], [])
+
+    def test_reject_unverified_new_account(self):
+        email = _email()
+        with self.assertRaises(ValueError) as ctx:
+            link_oauth_identity(
+                {
+                    "provider": "github",
+                    "provider_user_id": f"gu-{uuid.uuid4().hex[:8]}",
+                    "email": email,
+                    "name": "X",
+                    "email_verified": False,
+                }
+            )
+        self.assertEqual(str(ctx.exception), "email_unverified")
+        self.assertIsNone(get_user_by_email(email))
+
+    def test_missing_email_verified_rejected(self):
+        email = _email()
+        with self.assertRaises(ValueError) as ctx:
+            link_oauth_identity(
+                {"provider": "google", "provider_user_id": f"gu-{uuid.uuid4().hex[:8]}", "email": email, "name": "X"}
+            )
+        self.assertEqual(str(ctx.exception), "email_unverified")
+        self.assertIsNone(get_user_by_email(email))
 
 
 if __name__ == "__main__":

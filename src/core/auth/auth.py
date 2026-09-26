@@ -12,6 +12,7 @@
 
 # ── Re-export all public symbols from submodules ───────────────────────
 from src.core.auth.account import (
+    EmailAlreadyRegistered,
     authenticate_password,
     change_user_password,
     confirm_email_verification,
@@ -20,9 +21,12 @@ from src.core.auth.account import (
     disable_totp,
     enable_totp,
     get_account,
+    get_user_by_username,
+    is_valid_username,
     issue_2fa_challenge,
     issue_password_reset,
     link_oauth_identity,
+    normalize_username,
     register_with_password,
     resend_verification,
     resolve_2fa_challenge,
@@ -99,6 +103,7 @@ from src.core.auth.sessions import (
 from src.core.auth.totp import generate_backup_codes, generate_totp_secret, totp_uri, verify_backup_code, verify_totp
 
 __all__ = [
+    "EmailAlreadyRegistered",
     "UserLLMConfig",
     "_authenticated",
     "_ensure_rotation_columns",
@@ -136,6 +141,7 @@ __all__ = [
     "get_current_user_llm_config",
     "get_current_user_role",
     "get_user_by_id",
+    "get_user_by_username",
     "get_user_default_llm",
     "hash_password",
     "invalidate_user_cache",
@@ -143,6 +149,7 @@ __all__ = [
     "is_mcp_enabled_for_user",
     "is_provider_enabled",
     "is_skill_enabled_for_user",
+    "is_valid_username",
     "issue_2fa_challenge",
     "issue_password_reset",
     "link_oauth_identity",
@@ -150,6 +157,7 @@ __all__ = [
     "list_user_mcp_overrides",
     "list_user_skill_overrides",
     "list_users",
+    "normalize_username",
     "password_policy_ok",
     "read_session_token",
     "register_with_password",

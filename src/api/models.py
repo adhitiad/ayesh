@@ -117,6 +117,7 @@ class AuthRegisterRequest(BaseModel):
     email: str
     password: str
     name: str = ""
+    username: str | None = None  # opsional (W9a); kosong → auto dari local-part email
 
     model_config = {"strict": True}
 
@@ -127,17 +128,22 @@ class AuthRegisterRequest(BaseModel):
             raise ValueError("password terlalu panjang (maks 128 karakter)")
         if len(self.name) > 100:
             raise ValueError("name terlalu panjang (maks 100 karakter)")
+        if self.username is not None and len(self.username) > 64:
+            raise ValueError("username terlalu panjang (maks 64 karakter)")
 
 
 class AuthLoginRequest(BaseModel):
-    email: str
+    email: str = ""  # backward-compat; tanpa "@" → diperlakukan username
     password: str
+    identifier: str | None = None  # email ATAU username (W9b); bila ada, menang
 
     model_config = {"strict": True}
 
     def model_post_init(self, __context):
         if len(self.email) > 255 or len(self.password) > 128:
             raise ValueError("kredensial terlalu panjang")
+        if self.identifier is not None and len(self.identifier) > 255:
+            raise ValueError("identifier terlalu panjang")
 
 
 class AuthLogin2FARequest(BaseModel):

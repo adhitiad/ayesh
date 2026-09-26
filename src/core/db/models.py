@@ -125,6 +125,7 @@ class User(Base):
     # Auth manusia (email/password + OAuth + 2FA). Semua nullable → instalasi
     # API-key lama tetap berjalan; dimigrasi lazy via _ensure_auth_columns.
     email = Column(String(255), nullable=True, unique=True)
+    username = Column(String(50), nullable=True)  # unik case-insensitive via ix_users_username_lower
     password_hash = Column(String(512), nullable=True)
     email_verified = Column(Boolean, nullable=False, server_default="false")
     auth_provider = Column(String(30), nullable=True)

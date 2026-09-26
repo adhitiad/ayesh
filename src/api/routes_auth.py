@@ -28,6 +28,7 @@ from src.api.models import (
     AuthTotpDisableRequest,
 )
 from src.core.auth.account import (
+    EmailAlreadyRegistered,
     authenticate_password,
     change_user_password,
     confirm_email_verification,
@@ -108,14 +109,27 @@ def _send_verification_email(account: dict, token: str) -> None:
 @router.post("/register", status_code=201)
 def auth_register(request: Request, body: AuthRegisterRequest):
     try:
-        result = register_with_password(body.email, body.password, body.name)
+        result = register_with_password(body.email, body.password, body.name, username=body.username)
+    except EmailAlreadyRegistered as e:
+        record_auth_event("register", "conflict")
+        _auth_audit(
+            "register_failed",
+            details={"email": body.email, "reason": "email_terdaftar", "hint_provider": e.hint_provider},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Email sudah terdaftar. Silakan login dengan Google/GitHub atau password.",
+                "hint_provider": e.hint_provider,
+            },
+        ) from e
     except ValueError as e:
         record_auth_event("register", "invalid")
         _auth_audit("register_failed", details={"email": body.email, "reason": str(e)})
         raise HTTPException(status_code=400, detail=str(e)) from e
     account = result["account"]
     record_auth_event("register", "ok")
-    _auth_audit("register", actor=account["id"], details={"email": account["email"]})
+    _auth_audit("register", actor=account["id"], details={"email": account["email"], "method": "password"})
     try:
         if email_enabled():
             _send_verification_email(account, result["email_verify_token"])
@@ -133,14 +147,17 @@ def auth_register(request: Request, body: AuthRegisterRequest):
 
 @router.post("/login")
 def auth_login(request: Request, body: AuthLoginRequest):
-    user_id, err = authenticate_password(body.email, body.password)
+    identifier = (body.identifier or body.email or "").strip()
+    if not identifier:
+        raise HTTPException(status_code=400, detail="identifier atau email wajib")
+    user_id, err = authenticate_password(identifier, body.password)
     if err == "email_not_verified":
         record_auth_event("login", "email_not_verified")
-        _auth_audit("login_failed", details={"email": body.email, "reason": "email_not_verified"})
+        _auth_audit("login_failed", details={"identifier": identifier, "reason": "email_not_verified"})
         raise HTTPException(status_code=403, detail="Email belum diverifikasi. Cek email atau minta ulang token.")
     if err:
         record_auth_event("login", "fail")
-        _auth_audit("login_failed", details={"email": body.email, "reason": err})
+        _auth_audit("login_failed", details={"identifier": identifier, "reason": err})
         raise HTTPException(status_code=401, detail="Email atau password salah.")
     account = get_account(user_id)
     if not account:
@@ -346,7 +363,19 @@ async def auth_oauth_callback(provider: str, code: str = "", state: str = ""):
         return RedirectResponse("/?auth=error&reason=missing_params", status_code=302)
     try:
         redirect_to, profile = await exchange_oauth(provider, code, state)
+    except Exception as e:
+        logger.warning("OAuth callback gagal provider=%s: %s", provider, e)
+        record_auth_event("oauth", "fail")
+        return RedirectResponse("/?auth=error&reason=oauth_failed", status_code=302)
+    try:
         user = link_oauth_identity(profile)
+    except ValueError as e:
+        # W9d: provider bilang email tidak verified → tolak fail-closed, alasan
+        # diekspos agar UI bisa mengarahkan (sisanya tetap generik anti-enumerasi).
+        reason = str(e) if str(e) == "email_unverified" else "oauth_failed"
+        logger.warning("OAuth link ditolak provider=%s reason=%s", provider, reason)
+        record_auth_event("oauth", "fail")
+        return RedirectResponse(f"/?auth=error&reason={reason}", status_code=302)
     except Exception as e:
         logger.warning("OAuth callback gagal provider=%s: %s", provider, e)
         record_auth_event("oauth", "fail")
@@ -355,6 +384,7 @@ async def auth_oauth_callback(provider: str, code: str = "", state: str = ""):
     _auth_audit(
         "oauth_link", actor=user["id"], details={"provider": profile.get("provider"), "email": profile.get("email")}
     )
+    _auth_audit("login", actor=user["id"], details={"method": "oauth", "provider": profile.get("provider")})
     resp = RedirectResponse(f"{redirect_to or '/'}?auth=ok", status_code=302)
     _establish_session(resp, user["id"], None)
     return resp

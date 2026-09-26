@@ -57,12 +57,14 @@ def _email() -> str:
     return f"rt{uuid.uuid4().hex[:12]}@test.local"
 
 
-def _register_verified(client: TestClient, email: str, password: str | None = None) -> dict:
+def _register_verified(
+    client: TestClient, email: str, password: str | None = None, username: str | None = None
+) -> dict:
     password = password or _PW
-    resp = client.post(
-        "/auth/register",
-        json={"email": email, "password": password, "name": "RouteTest"},
-    )
+    payload: dict = {"email": email, "password": password, "name": "RouteTest"}
+    if username is not None:
+        payload["username"] = username
+    resp = client.post("/auth/register", json=payload)
     assert resp.status_code == 201, resp.text
     account = resp.json()["account"]
     _KNOWN_UIDS.append(account["id"])
@@ -431,6 +433,142 @@ class TestRateLimitAuthScope(unittest.TestCase):
         self.assertTrue(ok1)
         ok2, _ = check_rate_limit("auth", identity, kind="ip", burst=1, sustained=1)
         self.assertFalse(ok2)
+
+
+class TestRegisterUsernameRoute(unittest.TestCase):
+    """W9a/b via route: auto username di respons, login by identifier (3 cara), validasi 400."""
+
+    def test_register_returns_auto_username(self):
+        client = _client()
+        email = _email()
+        resp = client.post("/auth/register", json={"email": email, "password": _PW, "name": "U"})
+        self.assertEqual(resp.status_code, 201, resp.text)
+        account = resp.json()["account"]
+        _KNOWN_UIDS.append(account["id"])
+        self.assertEqual(account["username"], email.split("@")[0])
+
+    def test_login_username_three_ways(self):
+        email = _email()
+        uname = f"uni{uuid.uuid4().hex[:8]}"
+        seed = _client()
+        _register_verified(seed, email, username=uname)
+        # client baru per percobaan: tanpa cookie sesi → lolos CSRF double-submit
+        for payload in (
+            {"identifier": uname, "password": _PW},
+            {"identifier": uname.upper(), "password": _PW},
+            {"email": uname, "password": _PW},
+            {"identifier": email, "password": _PW},
+            {"email": email, "password": _PW},
+        ):
+            r = _client().post("/auth/login", json=payload)
+            self.assertEqual(r.status_code, 200, f"{payload}: {r.text}")
+
+    def test_register_invalid_username_400(self):
+        client = _client()
+        resp = client.post("/auth/register", json={"email": _email(), "password": _PW, "name": "U", "username": "x"})
+        self.assertEqual(resp.status_code, 400, resp.text)
+
+    def test_register_duplicate_username_400(self):
+        client = _client()
+        uname = f"dup{uuid.uuid4().hex[:8]}"
+        first = client.post("/auth/register", json={"email": _email(), "password": _PW, "name": "A", "username": uname})
+        self.assertEqual(first.status_code, 201, first.text)
+        _KNOWN_UIDS.append(first.json()["account"]["id"])
+        second = client.post(
+            "/auth/register", json={"email": _email(), "password": _PW, "name": "B", "username": uname.upper()}
+        )
+        self.assertEqual(second.status_code, 400, second.text)
+
+    def test_login_without_identifier_400(self):
+        client = _client()
+        resp = client.post("/auth/login", json={"password": _PW})
+        self.assertEqual(resp.status_code, 400)
+
+
+class TestRegisterDuplicate409(unittest.TestCase):
+    """W9c: duplikat email → 409 + hint_provider sesuai provider akun lama (fail-closed)."""
+
+    def _attempt(self, provider: str):
+        client = _client()
+        email = _email()
+        first = client.post("/auth/register", json={"email": email, "password": _PW, "name": "A"})
+        self.assertEqual(first.status_code, 201, first.text)
+        uid = first.json()["account"]["id"]
+        _KNOWN_UIDS.append(uid)
+        if provider != "password":
+            with get_session() as db:
+                row = db.query(User).filter(User.id == uid).one()
+                row.auth_provider = provider
+                row.oauth_provider_id = f"{provider}-dup-1"
+                db.commit()
+        return client.post("/auth/register", json={"email": email.upper(), "password": _PW, "name": "B"})
+
+    def test_hint_google(self):
+        dup = self._attempt("google")
+        self.assertEqual(dup.status_code, 409, dup.text)
+        detail = dup.json()["detail"]
+        self.assertEqual(detail["hint_provider"], "google")
+        self.assertIn("sudah terdaftar", detail["message"])
+
+    def test_hint_github(self):
+        dup = self._attempt("github")
+        self.assertEqual(dup.status_code, 409, dup.text)
+        self.assertEqual(dup.json()["detail"]["hint_provider"], "github")
+
+    def test_no_hint_when_password(self):
+        dup = self._attempt("password")
+        self.assertEqual(dup.status_code, 409, dup.text)
+        self.assertIsNone(dup.json()["detail"]["hint_provider"])
+
+
+class TestConnectedProvidersMe(unittest.TestCase):
+    """W9b: /auth/me mengekspos connected_providers + username."""
+
+    def test_me_connected_providers(self):
+        client = _client()
+        email = _email()
+        account = _register_verified(client, email)
+        r = client.post("/auth/login", json={"email": email, "password": _PW})
+        self.assertEqual(r.status_code, 200, r.text)
+        me = client.get("/auth/me")
+        self.assertEqual(me.status_code, 200, me.text)
+        self.assertEqual(me.json()["connected_providers"], [])
+        self.assertEqual(me.json()["username"], account["username"])
+        with get_session() as db:
+            row = db.query(User).filter(User.email == email).one()
+            row.auth_provider = "google"
+            row.oauth_provider_id = "g-me-1"
+            db.commit()
+        me2 = client.get("/auth/me")
+        self.assertEqual(me2.json()["connected_providers"], ["google"])
+
+
+class TestOAuthUnverifiedGateRoute(unittest.TestCase):
+    """W9d e2e: callback email_verified=false → reason=email_unverified, tanpa user/sesi."""
+
+    def test_callback_unverified_rejected(self):
+        client = _client()
+        email = _email()
+        with (
+            patch.dict(os.environ, _OAUTH_ENABLED_ENV),
+            patch("src.core.auth.oauth.httpx.AsyncClient", _FakeAsyncClient),
+        ):
+            _FakeAsyncClient.userinfo = {
+                "sub": f"g-{uuid.uuid4().hex[:8]}",
+                "email": email,
+                "email_verified": False,
+                "name": "Belum Verif",
+            }
+            state = _oauth_state(client)
+            cb = client.get(
+                f"/auth/oauth/google/callback?code=unit-code&state={state}",
+                follow_redirects=False,
+            )
+        self.assertEqual(cb.status_code, 302, cb.text)
+        self.assertIn("reason=email_unverified", cb.headers["location"])
+        self.assertFalse(any("ayesh_session=" in c for c in cb.headers.get_list("set-cookie")))
+        with get_session() as db:
+            self.assertIsNone(db.query(User).filter(User.email == email).first())
 
 
 if __name__ == "__main__":

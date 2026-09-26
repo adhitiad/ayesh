@@ -11,6 +11,7 @@ import threading
 
 _AUTH_COLUMNS = {
     "email": "VARCHAR(255)",
+    "username": "VARCHAR(50)",  # alias login (nullable; unik case-insensitive, W9a)
     "password_hash": "VARCHAR(512)",  # nosec B105 - nama kolom DB, bukan kredensial
     "email_verified": "BOOLEAN NOT NULL DEFAULT false",
     "auth_provider": "VARCHAR(30)",
@@ -27,7 +28,7 @@ _auth_tables_lock = threading.Lock()
 
 
 def _ensure_auth_columns():
-    """Tambah kolom auth di tabel users bila belum ada + unique index email."""
+    """Tambah kolom auth di tabel users bila belum ada + unique index email/username."""
     global _auth_columns_ensured
     if _auth_columns_ensured:
         return
@@ -51,6 +52,12 @@ def _ensure_auth_columns():
             if "email" in cols or "email" not in missing:
                 with engine.begin() as conn:
                     conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email)"))
+            # username unik case-insensitive (lower) — banyak baris NULL diizinkan
+            # (akun API-key lama tanpa alias tidak saling bertabrakan).
+            with engine.begin() as conn:
+                conn.execute(
+                    text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username_lower ON users (lower(username))")
+                )
         except Exception:
             logging.getLogger(__name__).exception("Gagal migrasi kolom auth di tabel users")
         finally:

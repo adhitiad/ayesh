@@ -2,7 +2,9 @@
 
 Semua token sekali-pakai (email_verify, password_reset, 2fa_challenge) disimpan
 hashed di auth_tokens — satu token = satu pemakaian, TTL ketat. Email disimpan
-lowercase (unik). Fail-closed: akun tanpa email_verified TIDAK bisa login bila
+lowercase (unik). Username: 3-32 karakter [a-z0-9_.] lowercase, unik
+case-insensitive; opsional saat register (kosong → auto dari local-part email).
+Fail-closed: akun tanpa email_verified TIDAK bisa login bila
 AUTH_REQUIRE_EMAIL_VERIFICATION=1 (default).
 """
 
@@ -27,6 +29,16 @@ from src.core.auth.totp import (
 logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
+_USERNAME_RE = re.compile(r"^[a-z0-9_.]{3,32}$")
+_OAUTH_PROVIDERS = ("google", "github")
+
+
+class EmailAlreadyRegistered(ValueError):
+    """Email sudah dipakai — route memetakan ke 409 + hint_provider (W9c)."""
+
+    def __init__(self, hint_provider: str | None = None):
+        super().__init__("email sudah terdaftar")
+        self.hint_provider = hint_provider
 
 
 def _ensure():
@@ -43,6 +55,44 @@ def is_valid_email(email: str) -> bool:
     if not email or len(email) > 255:
         return False
     return bool(_EMAIL_RE.match(email))
+
+
+def normalize_username(username: str) -> str:
+    return (username or "").strip().lower()
+
+
+def is_valid_username(username: str) -> bool:
+    return bool(_USERNAME_RE.match(username))
+
+
+def _base_from_email(email: str) -> str:
+    """Alias otomatis dari local-part email (bersih dari karakter di luar [a-z0-9_.])."""
+    local = re.sub(r"[^a-z0-9_.]", "", normalize_email(email).split("@", 1)[0])
+    if len(local) < 3:
+        local = f"user{local}"
+    return local[:32]
+
+
+def _username_taken(db, uname: str) -> bool:
+    from sqlalchemy import func
+
+    from src.core.db.models import User
+
+    return db.query(User.id).filter(func.lower(User.username) == uname).first() is not None
+
+
+def _claim_username(db, base: str) -> str:
+    """Ambil username unik dari basis (case-insensitive); bentrok → suffix -<n>."""
+    if not _username_taken(db, base):
+        return base
+    n = 2
+    while n < 1000:
+        suffix = f"-{n}"
+        candidate = f"{base[: 32 - len(suffix)]}{suffix}"
+        if not _username_taken(db, candidate):
+            return candidate
+        n += 1
+    return f"{base[:23]}-{secrets.token_hex(4)}"
 
 
 def require_email_verification() -> bool:
@@ -112,6 +162,21 @@ def get_user_by_email(email: str):
         return db.query(User).filter(User.email == email, User.active.is_(True)).first()
 
 
+def get_user_by_username(username: str):
+    """Lookup username case-insensitive (lower) — fallback login identifier W9b."""
+    uname = normalize_username(username)
+    if not uname:
+        return None
+    _ensure()
+    from sqlalchemy import func
+
+    from src.core.db.db_engine import get_session
+    from src.core.db.models import User
+
+    with get_session() as db:
+        return db.query(User).filter(func.lower(User.username) == uname, User.active.is_(True)).first()
+
+
 def get_account(user_id: str) -> dict | None:
     """Profil publik untuk /auth/me — tanpa secret apa pun."""
     _ensure()
@@ -122,20 +187,27 @@ def get_account(user_id: str) -> dict | None:
         u = db.query(User).filter(User.id == user_id, User.active.is_(True)).first()
         if not u:
             return None
+        connected = [u.auth_provider] if u.auth_provider in _OAUTH_PROVIDERS and u.oauth_provider_id else []
         return {
             "id": str(u.id),
             "name": u.name,
             "email": u.email,
+            "username": u.username,
             "email_verified": bool(u.email_verified),  # type: ignore[arg-type]
             "role": u.role,
             "auth_provider": u.auth_provider or ("password" if u.password_hash else None),
+            "connected_providers": connected,
             "totp_enabled": u.totp_confirmed_at is not None,
             "has_password": bool(u.password_hash),
         }
 
 
-def register_with_password(email: str, password: str, name: str) -> dict:
-    """Daftar akun email+password. Return {account, email_verify_token?, dev_link?}."""
+def register_with_password(email: str, password: str, name: str, username: str | None = None) -> dict:
+    """Daftar akun email+password. Username opsional — kosong → auto local-part.
+
+    Return {account, email_verify_token?, dev_link?}. Email terdaftar →
+    EmailAlreadyRegistered (route → 409 + hint_provider).
+    """
     email = normalize_email(email)
     ok, err = password_policy_ok(password)
     if not ok:
@@ -143,6 +215,11 @@ def register_with_password(email: str, password: str, name: str) -> dict:
     if not is_valid_email(email):
         raise ValueError("email tidak valid")
     name = (name or "").strip()[:100] or "user"
+    wanted: str | None = None
+    if username:
+        wanted = normalize_username(username)
+        if not is_valid_username(wanted):
+            raise ValueError("username tidak valid: 3-32 karakter, huruf kecil/angka/titik/underscore")
 
     from src.core.auth.auth_keys import create_user
 
@@ -156,9 +233,17 @@ def register_with_password(email: str, password: str, name: str) -> dict:
     with get_session() as db:
         dup = db.query(User).filter(User.email == email).first()
         if dup:
-            raise ValueError("email sudah terdaftar")
+            hint = dup.auth_provider if dup.auth_provider in _OAUTH_PROVIDERS else None
+            raise EmailAlreadyRegistered(hint)
+        if wanted is not None:
+            if _username_taken(db, wanted):
+                raise ValueError("username sudah dipakai")
+            final = wanted
+        else:
+            final = _claim_username(db, _base_from_email(email))
         row = db.query(User).filter(User.id == uid).first()
         row.email = email  # type: ignore[assignment]
+        row.username = final  # type: ignore[assignment]
         row.password_hash = hash_password(password)  # type: ignore[assignment]
         row.auth_provider = "password"  # type: ignore[assignment]
         row.email_verified = False  # type: ignore[assignment]
@@ -172,9 +257,11 @@ def register_with_password(email: str, password: str, name: str) -> dict:
     }
 
 
-def authenticate_password(email: str, password: str) -> tuple[str | None, str | None]:
-    """Validate email+password. Return (user_id, error_kind)."""
-    user = get_user_by_email(email)
+def authenticate_password(identifier: str, password: str) -> tuple[str | None, str | None]:
+    """Validate email/username + password. Lookup email dulu, fallback username (W9b)."""
+    user = get_user_by_email(identifier)
+    if not user:
+        user = get_user_by_username(identifier)
     if not user or not user.password_hash:
         return None, "invalid_credentials"
     if not verify_password(password, str(user.password_hash)):
@@ -362,7 +449,13 @@ def change_user_password(user_id: str, current: str, new_password: str) -> dict:
 
 
 def link_oauth_identity(profile: dict) -> dict:
-    """Cari/link/create user dari profil provider. Return load_user_profile()."""
+    """Cari/link/create user dari profil provider. Return load_user_profile().
+
+    Fail-closed (W9d): auto-link by email maupun pembuatan akun baru hanya bila
+    provider menyatakan email-nya verified (`profile["email_verified"]`) —
+    provider bilang unverified → tolak `email_unverified`, jangan link, jangan
+    set email_verified. Akun yang SUDAH terlink (by_provider) tetap boleh login.
+    """
     _ensure()
     from src.core.db.db_engine import get_session
     from src.core.db.models import User
@@ -383,6 +476,8 @@ def link_oauth_identity(profile: dict) -> dict:
         if by_provider:
             uid = str(by_provider.id)
         else:
+            if not profile.get("email_verified"):
+                raise ValueError("email_unverified")
             by_email = db.query(User).filter(User.email == email, User.active.is_(True)).first()
             if by_email:
                 if by_email.oauth_provider_id is not None and by_email.oauth_provider_id != provider_id:
@@ -400,6 +495,7 @@ def link_oauth_identity(profile: dict) -> dict:
         with get_session() as db:
             row = db.query(User).filter(User.id == uid).first()
             row.email = email  # type: ignore[assignment]
+            row.username = _claim_username(db, _base_from_email(email))  # type: ignore[assignment]
             row.email_verified = True  # type: ignore[assignment]
             row.auth_provider = provider  # type: ignore[assignment]
             row.oauth_provider_id = provider_id  # type: ignore[assignment]

@@ -82,7 +82,7 @@
 
 ## Verifikasi tiap fase
 - `compileall -q src api_server.py`, `ruff check .` **All checks passed**, `unittest discover -s tests` **617 OK** (fase 12), `go vet ./...` + `go test ./...` 5 PASS.
-- Gate terkini (fase 13, 2026-09-26): `unittest` **684 OK**, `ruff` clean, `bandit` **0 issue**, boot `api_server` **74 path** OpenAPI.
+- Gate terkini (per 2026-09-26, pasca fase 13 + workstream CORE-W1–W9): `unittest` **717 OK**, `ruff` clean, `bandit` **0 issue**, boot `api_server` **74 path** OpenAPI.
 - E2E smoke live: register `role=user` → create `pending` → `vip_active=false` → callback `success` → `role=vip` +30d → `billing/history` 1 row, IDOR 403, replay idempoten (expires tidak extend).
 
 ## File diubah

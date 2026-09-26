@@ -15,19 +15,23 @@ Jalankan server: `python api_server.py` (butuh PostgreSQL + Redis jalan).
 
 ## Login & Keamanan Akun
 
-Akun manusia berbeda dari API key: login pakai email + password (atau OAuth), sesi disimpan
-di cookie web (`ayesh_session`), dan bisa dilindungi 2FA.
+Akun manusia berbeda dari API key: login pakai email ATAU username + password (atau OAuth),
+sesi disimpan di cookie web (`ayesh_session`), dan bisa dilindungi 2FA.
 
 ### Daftar akun
 ```bash
 curl -X POST http://localhost:8080/auth/register \
   -H 'Content-Type: application/json' \
-  -d '{"email":"budi@mail.com","password":"rahasia123","name":"Budi"}'
+  -d '{"email":"budi@mail.com","password":"rahasia123","name":"Budi","username":"budi"}'
 ```
+- `username` opsional (3-32 karakter: huruf kecil/angka/`_`/`.`); kosongkan → dibuat otomatis dari
+  awalan email. Username unik di seluruh sistem.
 - Email wajib diverifikasi dulu sebelum bisa login (`AUTH_REQUIRE_EMAIL_VERIFICATION=1`).
 - Link verifikasi dikirim via SMTP. Mode dev tanpa SMTP (`AUTH_DEV_VERIFY=1`) menampilkan
   link langsung di respons — **jangan dipakai di produksi**.
 - Kalau kirim email gagal, register membalas **503** (fail-closed): akun belum aktif, ulangi nanti.
+- Email sudah terdaftar? Register membalas **409** dengan `hint_provider` (mis. `google`/`github`)
+  — petunjuk: login lewat provider itu, atau pakai password bila `null`.
 
 ### Verifikasi email
 - Buka link dari email, atau manual: `POST /auth/email/verify {"token": "..."}`.
@@ -39,9 +43,13 @@ curl -X POST http://localhost:8080/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"budi@mail.com","password":"rahasia123"}'
 ```
+- Kolom `email` menerima email ATAU username; field `identifier` juga bisa dipakai
+  (`{"identifier":"budi","password":"..."}`) — keduanya case-insensitive.
 - Sukses → cookie `ayesh_session` (+ `ayesh_csrf`) terpasang; kirim cookie itu di request berikutnya,
   dan header `X-CSRF-Token` untuk semua aksi ubah/hapus.
 - Punya 2FA? Respons berisi `challenge` → lanjut: `POST /auth/login/2fa {"challenge":"...","code":"6 digit"}`.
+- Setelah login, `GET /auth/me` menampilkan `username` dan `connected_providers`
+  (daftar OAuth yang sudah terhubung, mis. `["google"]`).
 
 ### Lupa password
 1. `POST /auth/password/reset {"email":"budi@mail.com"}` → link reset dikirim ke email.

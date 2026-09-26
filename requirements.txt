@@ -28,6 +28,11 @@ aiogram>=3.31.0
 grpcio>=1.84.0
 grpcio-tools>=1.84.0
 
+# P1 auth web: akun manusia (email/password, OAuth, 2FA, verifikasi email)
+argon2-cffi>=23.1.0
+pyotp>=2.9.0
+aiosmtplib>=3.0.2
+
 # Test factories
 factory-boy>=3.3.0
 pytest-factoryboy>=2.4.0

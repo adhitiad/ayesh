@@ -1,4 +1,6 @@
+import os
 import time
+from typing import ClassVar
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -72,21 +74,96 @@ def _resolve_client_ip(request: Request) -> str:
 
 
 def _authed_user_info(request: Request) -> tuple[str, str] | None:
-    """Return (user_id, role) bila API key valid, else None."""
+    """Return (user_id, role) bila kredensial valid (API key atau session cookie)."""
     key = (request.headers.get("X-API-Key") or "").strip()
     if not key:
         auth_header = (request.headers.get("Authorization") or "").strip()
         if auth_header.startswith("Bearer "):
             key = auth_header[7:].strip()
-    if not key:
-        return None
-    try:
-        user = verify_key(key)
-    except Exception:
-        return None
+    user = None
+    if key:
+        try:
+            user = verify_key(key)
+        except Exception:
+            user = None
+    if not user:
+        user = _session_user_from_cookie(request)
     if not user:
         return None
     return user["id"], user.get("role", "user")
+
+
+def _session_user_from_cookie(request: Request) -> dict | None:
+    """Resolve user via session cookie (fail-closed)."""
+    from src.core.auth.auth_keys import load_user_profile
+    from src.core.auth.sessions import read_session_token, verify_session
+
+    cookies = getattr(request, "cookies", None)
+    if not isinstance(cookies, dict) or not cookies:
+        return None
+    token = read_session_token(request)
+    if not token:
+        return None
+    try:
+        info = verify_session(token)
+    except Exception:
+        return None
+    if not info:
+        return None
+    return load_user_profile(info["user_id"])
+
+
+def _origin_allowed(request: Request) -> bool:
+    """Cek Origin (bila ada): harus same-origin (Host) atau ada di CORS_ORIGINS.
+
+    Aman utk CSRF: Origin dari browser harus berupa situs resmi. Absen Origin
+    (kiriman non-browser, mis. curl dengan key) → lewat (session cookie tetap
+    divalidasi terpisah via X-CSRF-Token).
+    """
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(origin)
+    if not parsed.scheme or not parsed.netloc:
+        return False
+    host = request.headers.get("host") or ""
+    if parsed.netloc == host:
+        return True
+    allowed = [
+        o.strip()
+        for o in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+        if o.strip()
+    ]
+    return origin.rstrip("/") in {a.rstrip("/") for a in allowed}
+
+
+class CSRFMiddleware(BaseHTTPMiddleware):
+    """Fail-closed CSRF untuk request ber-session cookie.
+
+    Mutasi (non-GET) yang membawa cookie ayesh_session wajib: Origin diizinkan
+    + X-CSRF-Token cocok dgn cookie ayesh_csrf (double-submit). Request tanpa
+    cookie sesi (API-key/publik) tidak terkena (tidak ada state yang dipertaruhkan).
+    """
+
+    _SAFE_METHODS: ClassVar[set[str]] = {"GET", "HEAD", "OPTIONS", "TRACE"}
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method in self._SAFE_METHODS:
+            return await call_next(request)
+        from src.core.auth.sessions import read_session_token, verify_csrf
+
+        if not read_session_token(request):
+            return await call_next(request)
+        if not _origin_allowed(request):
+            return JSONResponse(status_code=403, content={"error": "csrf_origin", "detail": "Origin tidak diizinkan."})
+        if not verify_csrf(request):
+            return JSONResponse(
+                status_code=403,
+                content={"error": "csrf_token", "detail": "X-CSRF-Token tidak cocok dengan cookie ayesh_csrf."},
+            )
+        return await call_next(request)
 
 
 def _authed_user_id(request: Request) -> str | None:
@@ -182,5 +259,6 @@ def setup_middleware(app: FastAPI):
     app.add_middleware(RequestLogContextMiddleware)
     app.add_middleware(PromptInjectionGuardMiddleware)
     app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(CSRFMiddleware)
     # Terakhir → middleware paling luar; menangkap 429/500 dari lapisan bawah.
     app.add_middleware(MetricsMiddleware)

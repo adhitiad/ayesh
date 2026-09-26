@@ -1,0 +1,79 @@
+"""Lazy migration tabel auth manusia (email/OAuth/2FA).
+
+Tabel users tidak dikelola Alembic; kolom auth ditambahkan in-place lewat
+ALTER TABLE (sekali per proses, thread-safe), menyusul pola _ensure_* di
+auth_keys.py. Tabel baru (auth_sessions, auth_oauth_states, auth_tokens)
+dibuat via Base.metadata.create_all. Kegagalan tidak ditelan diam-diam.
+"""
+
+import logging
+import threading
+
+_AUTH_COLUMNS = {
+    "email": "VARCHAR(255)",
+    "password_hash": "VARCHAR(512)",  # nosec B105 - nama kolom DB, bukan kredensial
+    "email_verified": "BOOLEAN NOT NULL DEFAULT false",
+    "auth_provider": "VARCHAR(30)",
+    "oauth_provider_id": "VARCHAR(255)",
+    "totp_secret": "VARCHAR(64)",  # nosec B105 - nama kolom DB (TOTP secret terenkripsi at-rest)
+    "totp_confirmed_at": "TIMESTAMP",
+    "totp_backup_hashes": "TEXT",
+}
+
+_auth_columns_ensured = False
+_auth_columns_lock = threading.Lock()
+_auth_tables_ensured = False
+_auth_tables_lock = threading.Lock()
+
+
+def _ensure_auth_columns():
+    """Tambah kolom auth di tabel users bila belum ada + unique index email."""
+    global _auth_columns_ensured
+    if _auth_columns_ensured:
+        return
+    with _auth_columns_lock:
+        if _auth_columns_ensured:
+            return
+        try:
+            from sqlalchemy import inspect, text
+
+            from src.core.db.db_engine import get_engine
+
+            engine = get_engine()
+            cols = {c["name"] for c in inspect(engine).get_columns("users")}
+            missing = [n for n in _AUTH_COLUMNS if n not in cols]
+            if missing:
+                with engine.begin() as conn:
+                    for name in missing:
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {_AUTH_COLUMNS[name]}"))
+            # email unik — index unik (NULL ganda diizinkan, PG memperlakukan
+            # NULL berbeda-beda sehingga user tanpa email tidak bertabrakan).
+            if "email" in cols or "email" not in missing:
+                with engine.begin() as conn:
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email)"))
+        except Exception:
+            logging.getLogger(__name__).exception("Gagal migrasi kolom auth di tabel users")
+        finally:
+            _auth_columns_ensured = True
+
+
+def _ensure_auth_tables():
+    """Buat tabel auth_sessions, auth_oauth_states, auth_tokens bila belum ada."""
+    global _auth_tables_ensured
+    if _auth_tables_ensured:
+        return
+    with _auth_tables_lock:
+        if _auth_tables_ensured:
+            return
+        try:
+            from src.core.db.db_engine import get_engine
+            from src.core.db.models import AuthOAuthState, AuthSession, AuthToken, Base
+
+            Base.metadata.create_all(
+                get_engine(),
+                tables=[AuthSession.__table__, AuthOAuthState.__table__, AuthToken.__table__],
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Gagal migrasi tabel auth")
+        finally:
+            _auth_tables_ensured = True

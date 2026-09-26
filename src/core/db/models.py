@@ -122,6 +122,16 @@ class User(Base):
     vip_expires_at = Column(DateTime, nullable=True)
     vip_ref = Column(String(100), nullable=True)
     vip_amount_cents = Column(Integer, nullable=True)
+    # Auth manusia (email/password + OAuth + 2FA). Semua nullable → instalasi
+    # API-key lama tetap berjalan; dimigrasi lazy via _ensure_auth_columns.
+    email = Column(String(255), nullable=True, unique=True)
+    password_hash = Column(String(512), nullable=True)
+    email_verified = Column(Boolean, nullable=False, server_default="false")
+    auth_provider = Column(String(30), nullable=True)
+    oauth_provider_id = Column(String(255), nullable=True)
+    totp_secret = Column(String(64), nullable=True)
+    totp_confirmed_at = Column(DateTime, nullable=True)
+    totp_backup_hashes = Column(Text, nullable=True)
 
 
 class VipUpgrade(Base):
@@ -318,3 +328,44 @@ class UserMCPOverride(Base):
     user_id = Column(String(36), nullable=False, index=True)
     mcp_name = Column(String(100), nullable=False)
     enabled = Column(Boolean, nullable=False, server_default="true")
+
+
+# ── Auth manusia (web session + 2FA + OAuth state + one-time tokens) ─────
+
+
+class AuthSession(Base):
+    """Sesi web (httpOnly cookie). token_hash = sha256 dari token plaintext."""
+
+    __tablename__ = "auth_sessions"
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    user_id = Column(String(36), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    ip = Column(String(64), nullable=True)
+    user_agent = Column(String(512), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default="NOW()")
+    expires_at = Column(DateTime, nullable=False)
+    last_active_at = Column(DateTime, nullable=False, server_default="NOW()")
+    revoked_at = Column(DateTime, nullable=True)
+
+
+class AuthOAuthState(Base):
+    """State OAuth sekali-pakai (anti CSRF OAuth); hash state = PK."""
+
+    __tablename__ = "auth_oauth_states"
+    state = Column(String(64), primary_key=True)
+    provider = Column(String(30), nullable=False)
+    redirect_to = Column(String(500), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default="NOW()")
+    expires_at = Column(DateTime, nullable=False)
+
+
+class AuthToken(Base):
+    """One-time token (email_verify | password_reset | 2fa_challenge)."""
+
+    __tablename__ = "auth_tokens"
+    token_hash = Column(String(64), primary_key=True)
+    user_id = Column(String(36), nullable=False, index=True)
+    kind = Column(String(30), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, server_default="NOW()")
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)

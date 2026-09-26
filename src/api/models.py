@@ -113,6 +113,116 @@ class VipUpgradeRequest(BaseModel):
             raise ValueError("amount_cents tidak boleh negatif")
 
 
+class AuthRegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: str = ""
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.email) > 255:
+            raise ValueError("email terlalu panjang (maks 255 karakter)")
+        if len(self.password) > 128:
+            raise ValueError("password terlalu panjang (maks 128 karakter)")
+        if len(self.name) > 100:
+            raise ValueError("name terlalu panjang (maks 100 karakter)")
+
+
+class AuthLoginRequest(BaseModel):
+    email: str
+    password: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.email) > 255 or len(self.password) > 128:
+            raise ValueError("kredensial terlalu panjang")
+
+
+class AuthLogin2FARequest(BaseModel):
+    challenge: str
+    code: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.challenge) > 200 or len(self.code) > 64:
+            raise ValueError("challenge/code terlalu panjang")
+
+
+class AuthEmailVerifyRequest(BaseModel):
+    token: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.token) > 200:
+            raise ValueError("token terlalu panjang")
+
+
+class AuthResendVerifyRequest(BaseModel):
+    email: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.email) > 255:
+            raise ValueError("email terlalu panjang")
+
+
+class AuthPasswordResetRequest(BaseModel):
+    email: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.email) > 255:
+            raise ValueError("email terlalu panjang")
+
+
+class AuthPasswordResetConfirmRequest(BaseModel):
+    token: str
+    new_password: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.token) > 200 or len(self.new_password) > 128:
+            raise ValueError("token/password terlalu panjang")
+
+
+class AuthPasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.current_password) > 128 or len(self.new_password) > 128:
+            raise ValueError("password terlalu panjang")
+
+
+class AuthTotpConfirmRequest(BaseModel):
+    code: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.code) > 64:
+            raise ValueError("code terlalu panjang")
+
+
+class AuthTotpDisableRequest(BaseModel):
+    password: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.password) > 128:
+            raise ValueError("password terlalu panjang")
+
+
 class UserLLMConfigRequest(BaseModel):
     provider: str
     model: str

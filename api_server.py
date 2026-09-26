@@ -12,6 +12,7 @@ from src.api.models import ChatRequest, FeedbackRequest, JobRequest, TaskRequest
 from src.api.routes_agents import create_user_endpoint  # noqa: F401
 from src.api.routes_agents import router as agents_router
 from src.api.routes_approvals import router as approvals_router
+from src.api.routes_auth import router as auth_router
 from src.api.routes_chat import router as chat_router
 from src.api.routes_control import router as control_router
 from src.api.routes_feedback import router as feedback_router
@@ -40,12 +41,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Ayesh — Multi-Agent AI Orchestrator API",
-    version="2.1",
+    version="2.2",
     description="""## Authentication
 
-Semua endpoint yang memerlukan auth mendukung **2 cara**:
+Endpoint pelindung mendukung **3 cara**:
 
-### 1. X-API-Key (Header)
+### 1. X-API-Key (Header) — untuk bot/CLI/desktop/gRPC
 ```
 X-API-Key: fr_abc123def456...
 ```
@@ -55,7 +56,12 @@ X-API-Key: fr_abc123def456...
 Authorization: Bearer fr_abc123def456...
 ```
 
-> Register publik: `POST /users/register` → role=user (api_key sekali tampil).
+### 3. Session cookie (web) — `ayesh_session` (HttpOnly, SameSite=Lax) + `X-CSRF-Token`
+Login via `POST /auth/login`; identitas via `GET /auth/me`. Mutasi ber-cookie
+wajib mengirim header `X-CSRF-Token` yang sama dengan cookie `ayesh_csrf`.
+
+> Register publik (API key): `POST /users/register` → role=user (api_key sekali tampil).
+> Akun web: `POST /auth/register` → email+password, verifikasi email, OAuth, 2FA TOTP.
 > VIP $13.87: `POST /webhooks/vip-upgrade` (HMAC, idempotent) → role=vip.
 
 ## Roles
@@ -68,6 +74,10 @@ User manage hanya owner, model manage self/owner, global hanya vip (owner+vip).
     lifespan=lifespan,
     openapi_tags=[
         {"name": "Chat", "description": "Chat dengan AI agent"},
+        {
+            "name": "Auth",
+            "description": "Akun web: register/login (email+password, OAuth, 2FA), sesi cookie, reset password",
+        },
         {"name": "Users", "description": "Manajemen user & API key (register/vip)"},
         {"name": "Jobs", "description": "Scheduled jobs (interval/harian)"},
         {"name": "Tasks", "description": "Async task queue"},
@@ -131,6 +141,7 @@ setup_middleware(app)
 app.include_router(chat_router)
 app.include_router(feedback_router)
 app.include_router(agents_router)
+app.include_router(auth_router)
 app.include_router(jobs_router)
 app.include_router(tasks_router)
 app.include_router(approvals_router)

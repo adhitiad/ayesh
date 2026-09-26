@@ -21,6 +21,8 @@ _lock = threading.Lock()
 _requests: dict[tuple[str, str, str], int] = {}
 # route -> {"count", "sum", "buckets": {le -> count}}
 _duration: dict[str, dict] = {}
+# (event, outcome) -> count — event auth/keamanan (login, 2fa, reset, oauth, dll.)
+_auth_events: dict[tuple[str, str], int] = {}
 
 
 def _escape_label(value: str) -> str:
@@ -50,6 +52,17 @@ def record_request(route: str, method: str, status: int, duration_s: float) -> N
         for le in DURATION_BUCKETS:
             if dur <= le:
                 entry["buckets"][le] = entry["buckets"].get(le, 0) + 1
+
+
+def record_auth_event(event: str, outcome: str) -> None:
+    """Catat satu event auth/keamanan (login/2fa/reset/oauth/dll.).
+
+    Outcome memakai label tetap (ok/fail/invalid/etc.) — tidak pernah memuat data
+    sensitif, hanya status. Cardinality rendah via event ternormalisasi.
+    """
+    with _lock:
+        key = (event or "unknown", outcome or "unknown")
+        _auth_events[key] = _auth_events.get(key, 0) + 1
 
 
 def _health_gauges() -> list[tuple[str, float]]:
@@ -99,6 +112,12 @@ def render() -> str:
         lines.append(f"ayesh_http_request_duration_seconds_sum{{{label}}} {_fmt(entry['sum'])}")
         lines.append(f"ayesh_http_request_duration_seconds_count{{{label}}} {entry['count']}")
 
+    lines.append("# HELP ayesh_auth_events_total Jumlah event auth/keamanan per event/outcome.")
+    lines.append("# TYPE ayesh_auth_events_total counter")
+    for (event, outcome), count in _auth_events.items():
+        labels = f'event="{_escape_label(event)}",outcome="{_escape_label(outcome)}"'
+        lines.append(f"ayesh_auth_events_total{{{labels}}} {count}")
+
     lines.append("# HELP ayesh_postgres_up Status kesehatan PostgreSQL (1=up, 0=down).")
     lines.append("# TYPE ayesh_postgres_up gauge")
     lines.append("# HELP ayesh_redis_up Status kesehatan Redis (1=up, 0=down).")
@@ -116,6 +135,7 @@ def reset_for_tests() -> None:
     with _lock:
         _requests.clear()
         _duration.clear()
+        _auth_events.clear()
 
 
 def snapshot_counts() -> dict[tuple[str, str, str], int]:

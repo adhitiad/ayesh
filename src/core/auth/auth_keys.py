@@ -340,6 +340,9 @@ def create_user(name: str, role: str = "user") -> dict:
     _ensure_vip_columns()
     _ensure_vip_tables()
     _ensure_user_config_tables()
+    from src.core.auth.auth_db import _ensure_auth_columns
+
+    _ensure_auth_columns()
     from src.core.db.db_engine import get_session
     from src.core.db.models import User
 
@@ -441,6 +444,40 @@ def verify_key(api_key: str) -> dict | None:
                 "vip_expires_at": expires,
             }
         return None
+
+
+def load_user_profile(uid: str) -> dict | None:
+    """Load user aktif + lazy vip demote (pola sama dengan verify_key).
+
+    Dipakai jalur session cookie: role/vip_expires_at dinormalisasi agar
+    konsisten dengan jalur API key. Return None bila tidak ada / non-aktif.
+    """
+    if not uid:
+        return None
+    _ensure_rotation_columns()
+    _ensure_vip_columns()
+    _ensure_vip_tables()
+    from src.core.auth.auth_context import _utcnow
+    from src.core.db.db_engine import get_session
+    from src.core.db.models import User
+
+    with get_session() as db:
+        user = db.query(User).filter(User.id == uid, User.active.is_(True)).first()
+        if not user:
+            return None
+        role = str(user.role or "user")
+        expires: datetime | None = user.vip_expires_at  # type: ignore[assignment]
+        if role == "vip" and expires is not None:
+            try:
+                expired = expires <= _utcnow()
+            except Exception:
+                expired = True
+            if expired:
+                user.role = "user"  # type: ignore[assignment]
+                db.commit()
+                invalidate_user_cache(str(user.id))
+                role = "user"
+        return {"id": str(user.id), "name": user.name, "role": role, "vip_expires_at": expires}
 
 
 def rotate_user_key(uid: str, grace_hours: int | None = None) -> dict | None:

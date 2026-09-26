@@ -1,0 +1,265 @@
+"""Test endpoint /auth (register/login/me/logout/2FA/CSRF) via TestClient.
+
+Butuh DB + (opsional) Redis (rate limit). Rate limit auth di-longgarkan agar
+test 2FA/CSRF tidak flaky. Baris user/auth dibersihkan di tearDown.
+"""
+
+import os
+import unittest
+import uuid
+from unittest.mock import patch
+
+import pyotp
+from fastapi.testclient import TestClient
+
+from api_server import app
+from src.core.db.db_engine import get_session
+from src.core.db.models import AuthSession, AuthToken, User
+from src.core.system.rate_limit import _scope_for_path, check_rate_limit
+
+_KNOWN_UIDS: list[str] = []
+_PW = "secret-pass-123"
+
+_ENV = patch.dict(
+    os.environ,
+    {
+        "AUTH_DEV_VERIFY": "1",
+        "AUTH_REQUIRE_EMAIL_VERIFICATION": "1",
+        "RATE_LIMIT_AUTH_BURST": "500",
+        "RATE_LIMIT_AUTH_SUSTAINED": "10000",
+        "RATE_LIMIT_AUTH_USER_BURST": "500",
+        "RATE_LIMIT_AUTH_USER_SUSTAINED": "10000",
+        "AUTH_OAUTH_GOOGLE_CLIENT_ID": "",
+        "AUTH_OAUTH_GOOGLE_CLIENT_SECRET": "",
+    },
+)
+
+
+def setUpModule():
+    _ENV.start()
+
+
+def tearDownModule():
+    _ENV.stop()
+    with get_session() as db:
+        db.query(AuthSession).filter(AuthSession.user_id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
+        db.query(AuthToken).filter(AuthToken.user_id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
+        db.query(User).filter(User.id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
+        db.commit()
+
+
+def _client() -> TestClient:
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _email() -> str:
+    return f"rt{uuid.uuid4().hex[:12]}@test.local"
+
+
+def _register_verified(client: TestClient, email: str, password: str | None = None) -> dict:
+    password = password or _PW
+    resp = client.post(
+        "/auth/register",
+        json={"email": email, "password": password, "name": "RouteTest"},
+    )
+    assert resp.status_code == 201, resp.text
+    account = resp.json()["account"]
+    _KNOWN_UIDS.append(account["id"])
+    dev_link = resp.json()["dev_link"]
+    token = dev_link.rsplit("token=", 1)[1]
+    r = client.post("/auth/email/verify", json={"token": token})
+    assert r.status_code == 200, r.text
+    return account
+
+
+class TestRegisterLoginMeLogout(unittest.TestCase):
+    def test_register_returns_verified_false(self):
+        client = _client()
+        email = _email()
+        resp = client.post("/auth/register", json={"email": email, "password": "secret-pass-123", "name": "X"})
+        self.assertEqual(resp.status_code, 201, resp.text)
+        account = resp.json()["account"]
+        _KNOWN_UIDS.append(account["id"])
+        self.assertFalse(account["email_verified"])
+        self.assertEqual(account["auth_provider"], "password")
+
+    def test_login_me_logout(self):
+        client = _client()
+        email = _email()
+        password = "secret-pass-123"
+        _register_verified(client, email, password)
+        # logout dulu untuk buang session register? register tidak bikin session.
+        login = client.post("/auth/login", json={"email": email, "password": password})
+        self.assertEqual(login.status_code, 200, login.text)
+        data = login.json()
+        self.assertEqual(data["status"], "ok")
+        self.assertTrue(data["account"]["email_verified"])
+        self.assertIn("set-cookie", login.headers)
+        self.assertIn("HttpOnly", login.headers["set-cookie"])
+
+        me = client.get("/auth/me")
+        self.assertEqual(me.status_code, 200, me.text)
+        self.assertEqual(me.json()["email"], email)
+
+        out = client.post("/auth/logout", headers={"X-CSRF-Token": client.cookies.get("ayesh_csrf")})
+        self.assertEqual(out.status_code, 200, out.text)
+        me2 = client.get("/auth/me")
+        self.assertEqual(me2.status_code, 401, me2.text)
+
+    def test_login_unverified_blocked(self):
+        client = _client()
+        email = _email()
+        password = "secret-pass-123"
+        resp = client.post("/auth/register", json={"email": email, "password": password, "name": "X"})
+        self.assertEqual(resp.status_code, 201, resp.text)
+        _KNOWN_UIDS.append(resp.json()["account"]["id"])
+        login = client.post("/auth/login", json={"email": email, "password": password})
+        self.assertEqual(login.status_code, 403, login.text)
+        self.assertEqual(login.json()["detail"], "Email belum diverifikasi. Cek email atau minta ulang token.")
+
+    def test_login_wrong_credentials(self):
+        client = _client()
+        login = client.post("/auth/login", json={"email": "nobody@test.local", "password": "whatever-123"})
+        self.assertEqual(login.status_code, 401, login.text)
+
+    def test_verify_token_one_time_via_route(self):
+        client = _client()
+        email = _email()
+        resp = client.post("/auth/register", json={"email": email, "password": "secret-pass-123", "name": "X"})
+        account = resp.json()["account"]
+        _KNOWN_UIDS.append(account["id"])
+        token = resp.json()["dev_link"].rsplit("token=", 1)[1]
+        ok = client.post("/auth/email/verify", json={"token": token})
+        self.assertEqual(ok.status_code, 200)
+        again = client.post("/auth/email/verify", json={"token": token})
+        self.assertEqual(again.status_code, 400)
+
+
+class TestCsrfProtection(unittest.TestCase):
+    def setUp(self):
+        self.client = _client()
+        self.email = _email()
+        _register_verified(self.client, self.email, "secret-pass-123")
+        login = self.client.post("/auth/login", json={"email": self.email, "password": "secret-pass-123"})
+        self.assertEqual(login.status_code, 200)
+        self.csrf = self.client.cookies.get("ayesh_csrf")
+
+    def test_mutation_requires_csrf_token(self):
+        resp = self.client.post(
+            "/auth/password/change",
+            json={"current_password": "secret-pass-123", "new_password": "new-pass-456"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["error"], "csrf_token")
+
+    def test_bad_origin_rejected(self):
+        resp = self.client.post(
+            "/auth/password/change",
+            json={"current_password": "secret-pass-123", "new_password": "new-pass-456"},
+            headers={"X-CSRF-Token": self.csrf, "Origin": "http://evil.example"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["error"], "csrf_origin")
+
+    def test_valid_csrf_passes(self):
+        resp = self.client.post(
+            "/auth/password/change",
+            json={"current_password": "secret-pass-123", "new_password": "new-pass-456"},
+            headers={"X-CSRF-Token": self.csrf},
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        # password lama sudah tidak valid (cek dari client bersih tanpa session)
+        old = _client().post("/auth/login", json={"email": self.email, "password": "secret-pass-123"})
+        self.assertEqual(old.status_code, 401)
+
+    def test_logout_requires_csrf(self):
+        resp = self.client.post("/auth/logout")
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["error"], "csrf_token")
+
+    def test_logout_with_csrf_ok(self):
+        resp = self.client.post("/auth/logout", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+
+class TestTwoFactorRoutes(unittest.TestCase):
+    def setUp(self):
+        self.client = _client()
+        self.email = _email()
+        _register_verified(self.client, self.email, "secret-pass-123")
+        login = self.client.post("/auth/login", json={"email": self.email, "password": "secret-pass-123"})
+        self.assertEqual(login.status_code, 200)
+        self.csrf = self.client.cookies.get("ayesh_csrf")
+
+    def test_enable_and_login_with_totp(self):
+        setup = self.client.post("/auth/2fa/setup", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(setup.status_code, 200, setup.text)
+        secret = setup.json()["secret"]
+        code = pyotp.TOTP(secret).now()
+        confirm = self.client.post("/auth/2fa/confirm", json={"code": code}, headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(confirm.status_code, 200, confirm.text)
+        backup_codes = confirm.json()["backup_codes"]
+        self.assertEqual(len(backup_codes), 10)
+        self.assertRegex(backup_codes[0], r"^[0-9A-F]{4}-[0-9A-F]{4}$")
+
+        # login ulang dari client bersih → 2fa_required
+        fresh = _client()
+        login = fresh.post("/auth/login", json={"email": self.email, "password": "secret-pass-123"})
+        self.assertEqual(login.status_code, 200)
+        self.assertEqual(login.json()["status"], "2fa_required")
+        challenge = login.json()["challenge"]
+        code2 = pyotp.TOTP(secret).now()
+        ok = fresh.post("/auth/login/2fa", json={"challenge": challenge, "code": code2})
+        self.assertEqual(ok.status_code, 200, ok.text)
+        self.assertEqual(ok.json()["status"], "ok")
+        me = fresh.get("/auth/me")
+        self.assertEqual(me.status_code, 200)
+
+        # disable via password
+        disable = self.client.post(
+            "/auth/2fa/disable",
+            json={"password": "secret-pass-123"},
+            headers={"X-CSRF-Token": self.csrf},
+        )
+        self.assertEqual(disable.status_code, 200, disable.text)
+        fresh2 = _client()
+        login_no2fa = fresh2.post("/auth/login", json={"email": self.email, "password": "secret-pass-123"})
+        self.assertEqual(login_no2fa.json()["status"], "ok")
+
+
+class TestOAuthRoutes(unittest.TestCase):
+    def test_start_unknown_provider(self):
+        client = _client()
+        resp = client.get("/auth/oauth/bogus")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_start_disabled_provider(self):
+        client = _client()
+        resp = client.get("/auth/oauth/google")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("tidak dikonfigurasi", resp.json()["detail"])
+
+    def test_callback_missing_params(self):
+        client = _client()
+        resp = client.get("/auth/oauth/google/callback", follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("reason=missing_params", resp.headers["location"])
+
+
+class TestRateLimitAuthScope(unittest.TestCase):
+    def test_scope_mapping(self):
+        self.assertEqual(_scope_for_path("/auth/login"), "auth")
+        self.assertEqual(_scope_for_path("/auth/register"), "auth")
+        self.assertEqual(_scope_for_path("/auth/password/reset"), "auth")
+        self.assertEqual(_scope_for_path("/users/register"), "register")
+
+    def test_auth_scope_limits(self):
+        identity = f"unit-{uuid.uuid4().hex}"
+        ok1, _ = check_rate_limit("auth", identity, kind="ip", burst=1, sustained=1)
+        self.assertTrue(ok1)
+        ok2, _ = check_rate_limit("auth", identity, kind="ip", burst=1, sustained=1)
+        self.assertFalse(ok2)
+
+
+if __name__ == "__main__":
+    unittest.main()

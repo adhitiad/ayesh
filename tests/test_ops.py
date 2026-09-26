@@ -128,7 +128,7 @@ class TestRetentionPurge(unittest.TestCase):
         def _params(fragment: str) -> tuple:
             for sql, params in conn.cur.executed:
                 if fragment in sql:
-                    return params
+                    return tuple(params)
             raise AssertionError(f"SQL berisi {fragment!r} tidak ditemukan")
 
         self.assertEqual(_params("FROM logs"), ("7",))

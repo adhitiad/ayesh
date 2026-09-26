@@ -33,6 +33,7 @@ TABLES = [
     "auth_sessions",
     "auth_tokens",
     "auth_oauth_states",
+    "auth_oauth_accounts",
     "user_llm_configs",
     "user_skill_overrides",
     "user_mcp_overrides",

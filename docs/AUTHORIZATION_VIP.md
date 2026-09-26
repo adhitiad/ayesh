@@ -48,13 +48,18 @@ Authorization: Bearer fr_abc123...
 | **Publik** | `GET /health` `src/api/routes_system.py:25` | **none** | tetap publik |
 |  | `POST /users/register` `src/api/routes_agents.py` | **none** + `register` scope RL | selalu `role=user` |
 |  | `POST /webhooks/vip-upgrade` `src/api/routes_webhooks.py:40` | **HMAC** (`VIP_WEBHOOK_SECRET`) | fail-closed 503 bila secret kosong |
-| **Publik — akun web** | `POST /auth/register` `src/api/routes_auth.py:109` | **none** + RL scope `auth` (5/20) | selalu `role=user`; email terdaftar → **409** + `hint_provider` (W9) |
-|  | `POST /auth/login`, `POST /auth/login/2fa` `routes_auth.py:148,179` | **none** + RL scope `auth` (5/20) | sukses → cookie `ayesh_session` + `ayesh_csrf`; login email ATAU username (`identifier`) |
-|  | `POST /auth/logout` `routes_auth.py:201` | cookie opsional | clear cookie (idempoten) |
-|  | `POST /auth/email/verify[/request]`, `POST /auth/password/reset[/confirm]` `routes_auth.py:223-254` | token sekali-pakai (hashed) | register gagal kirim email → **503 fail-closed** |
-|  | `GET /auth/oauth/{provider}` + `/callback` `routes_auth.py:348,359` | state `auth_oauth_states` TTL 10 mnt | Google/GitHub; error → redirect `/?auth=error&reason=` (`email_unverified` bila provider belum verifikasi email, sisanya generik) |
-| **Authenticated — akun web** | `GET /auth/me`, `POST /auth/password/change` `routes_auth.py:213,268` | `require_authenticated` + CSRF (`X-CSRF-Token`) bila cookie | `/auth/me` mengekspos `username` + `connected_providers` |
-|  | `GET /auth/2fa/status`, `POST /auth/2fa/{setup,confirm,disable}` `routes_auth.py:285-326` | `require_authenticated` + CSRF | TOTP pyotp + 10 backup code sekali pakai |
+| **Publik — akun web** | `POST /auth/register` `src/api/routes_auth.py:119` | **none** + RL scope `auth` (5/20) | selalu `role=user`; email terdaftar → **409** + `hint_provider` (W9) |
+|  | `POST /auth/login`, `POST /auth/login/2fa` `routes_auth.py:158,189` | **none** + RL scope `auth` (5/20) | sukses → cookie `ayesh_session` + `ayesh_csrf`; login email ATAU username (`identifier`) |
+|  | `POST /auth/logout` `routes_auth.py:211` | cookie opsional | clear cookie (idempoten) |
+|  | `POST /auth/email/verify[/request]`, `POST /auth/password/reset[/confirm]` `routes_auth.py:328-373` | token sekali-pakai (hashed) | register gagal kirim email → **503 fail-closed** |
+|  | `GET /auth/oauth/{provider}` + `/callback` `routes_auth.py:467,478` | state `auth_oauth_states` TTL 10 mnt | Google/GitHub; error → redirect `/?auth=error&reason=` (`email_unverified` bila provider belum verifikasi email, sisanya generik) |
+| **Authenticated — akun web** | `GET /auth/me`, `POST /auth/password/change` `routes_auth.py:223,373` | `require_authenticated` + CSRF (`X-CSRF-Token`) bila cookie | `/auth/me` mengekspos `username` + `connected_providers` |
+|  | `GET /auth/2fa/status`, `POST /auth/2fa/{setup,confirm,disable}` `routes_auth.py:390-430` | `require_authenticated` + CSRF | TOTP pyotp + 10 backup code sekali pakai |
+|  | `GET /auth/sessions`, `DELETE /auth/sessions/{session_id}` **W6** `routes_auth.py:236,244` | `require_authenticated` + CSRF | daftar/revoke sesi milik sendiri (ownership di query) |
+|  | `PATCH /auth/me` **W6** `routes_auth.py:262` | `require_authenticated` + CSRF | ubah `name` saja; blank/>100 char → 422 |
+|  | `DELETE /auth/me` **W6** `routes_auth.py:277` | `require_authenticated` + CSRF + **password + kode 2FA bila aktif** | soft-delete (active=false, email→`deleted-*@deleted.invalid`); audit |
+|  | `POST /auth/2fa/backup/regenerate` **W6** `routes_auth.py:445` | `require_authenticated` + CSRF + password | 10 backup code baru, lama hangus |
+|  | `GET /auth/linked-accounts`, `DELETE /auth/linked-accounts/{provider}` **W9e** `routes_auth.py:302,309` | `require_authenticated` + CSRF | multi-provider; unlink provider terakhir akun OAuth-only → 400 `last_provider` |
 | **Authenticated read (user/vip/owner)** | `POST /chat`, `POST /chat/stream*` `routes_chat.py:30-139` | `require_authenticated` | dulunya `require_auth` |
 |  | `POST /feedback` `routes_feedback.py:19` | `require_authenticated` |  |
 |  | `GET /agents`, `GET /skills`, `GET /skills/{name}` `routes_agents.py:49-82` | `require_authenticated` | katalog, filter `disabled_*` per-user |

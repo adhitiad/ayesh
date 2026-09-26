@@ -1,7 +1,18 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, Numeric, PrimaryKeyConstraint, String, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    Numeric,
+    PrimaryKeyConstraint,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, declarative_base, mapped_column
 
@@ -370,3 +381,26 @@ class AuthToken(Base):
     created_at = Column(DateTime, nullable=False, server_default="NOW()")
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
+
+
+class AuthOAuthAccount(Base):
+    """Identitas OAuth per user — multi-provider (W9e).
+
+    Unik per (provider, provider_id): satu identitas hanya boleh terikat satu
+    user. Unik per (user_id, provider): satu user satu akun per provider
+    (ganti akun provider → unlink dulu). Backfill dari kolom legacy
+    users.auth_provider/oauth_provider_id (lihat auth_db.backfill_oauth_accounts).
+    """
+
+    __tablename__ = "auth_oauth_accounts"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_id", name="uq_auth_oauth_identity"),
+        UniqueConstraint("user_id", "provider", name="uq_auth_oauth_user_provider"),
+    )
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    user_id = Column(String(36), nullable=False, index=True)
+    provider = Column(String(30), nullable=False)
+    provider_id = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=True)
+    email_verified = Column(Boolean, nullable=False, server_default="false")
+    created_at = Column(DateTime, nullable=False, server_default="NOW()")

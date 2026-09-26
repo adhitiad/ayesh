@@ -229,6 +229,33 @@ class AuthTotpDisableRequest(BaseModel):
             raise ValueError("password terlalu panjang")
 
 
+class AuthMeUpdateRequest(BaseModel):
+    """PATCH /auth/me — display name saja; email change = alur terpisah (W6)."""
+
+    name: str
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if not self.name.strip() or len(self.name) > 100:
+            raise ValueError("name wajib 1-100 karakter")
+
+
+class AuthAccountDeleteRequest(BaseModel):
+    """DELETE /auth/me — hapus-akun mandiri. Hard-gate password + kode 2FA bila aktif (W6)."""
+
+    password: str
+    code: str | None = None  # TOTP/backup — wajib bila 2FA aktif
+
+    model_config = {"strict": True}
+
+    def model_post_init(self, __context):
+        if len(self.password) > 128:
+            raise ValueError("password terlalu panjang")
+        if self.code is not None and len(self.code) > 64:
+            raise ValueError("code terlalu panjang")
+
+
 class UserLLMConfigRequest(BaseModel):
     provider: str
     model: str

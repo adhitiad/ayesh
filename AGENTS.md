@@ -11,7 +11,7 @@ Multi-agent AI orchestrator (Indonesian). Identity: **Ayesh** ("Aku adalah Ayesh
 - Redis must be running locally (`redis://localhost:6379/0`) — memory layer depends on it. NOTE: local Redis is old (no RESP3) — clients must use `protocol=2` (see monkey-patch quirk below; `bootstrap.py` checks with RESP2).
 
 ## Linting
-- Run `ruff check .` before committing (config in `.ruff.toml`). All 717 tests must pass: `python -m unittest discover -s tests` (atau `venv\Scripts\python.exe -m unittest ...`).
+- Run `ruff check .` before committing (config in `.ruff.toml`). All 749 tests must pass: `python -m unittest discover -s tests` (atau `venv\Scripts\python.exe -m unittest ...`).
 - Bandit: `python -m bandit -r src/` — must report 0 issues (false positives annotated `# nosec `, see the `_SENSITIVE_PATTERNS` block in `error_handling.py`).
 - mypy: config di `pyproject.toml [tool.mypy]` (bukan `mypy.ini` — file itu sudah tidak ada): lenient baseline (`ignore_missing_imports` + noise codes off) — NOT a gate. Baseline terukur 2026-09-26 dengan mypy 2.3.1: **21 error / 180 file** (mayoritas `no-any-return` + 3 `no-redef`). Jangan kejar 0; cukup **tidak menambah error baru**. Do not disable semantic codes to force a pass. New code should keep types clean; shrinking the baseline incrementally is the goal.
 
@@ -90,7 +90,7 @@ Multi-agent AI orchestrator (Indonesian). Identity: **Ayesh** ("Aku adalah Ayesh
 - `routes_chat.py` — `POST /chat`, `POST /chat/stream`, `POST /chat/stream/tokens`.
 - `routes_feedback.py` — `POST /feedback`.
 - `routes_agents.py` — `POST/GET /users`, `DELETE /users/{id}`, `POST /users/{id}/rotate`, `GET /agents`.
-- `routes_auth.py` — akun manusia (prefix `/auth`): `POST /register`, `POST /login`, `POST /login/2fa`, `POST /logout`, `GET /me`, `POST /email/verify[/request]`, `POST /password/reset[/confirm]`, `POST /password/change`, `GET/POST /2fa/{status,setup,confirm,disable}`, `GET /oauth/{provider}[/callback]`. Auth dependency: cookie `ayesh_session` (atau `X-API-Key`), CSRF `X-CSRF-Token` untuk mutasi cookie-based.
+- `routes_auth.py` — akun manusia (prefix `/auth`): `POST /register`, `POST /login`, `POST /login/2fa`, `POST /logout`, `GET /me`, `PATCH /me` (ubah nama), `DELETE /me` (hapus-akun mandiri), `GET /sessions`, `DELETE /sessions/{id}`, `POST /email/verify[/request]`, `POST /password/reset[/confirm]`, `POST /password/change`, `GET/POST /2fa/{status,setup,confirm,disable}`, `POST /2fa/backup/regenerate`, `GET /linked-accounts`, `DELETE /linked-accounts/{provider}`, `GET /oauth/{provider}[/callback]`. Auth dependency: cookie `ayesh_session` (atau `X-API-Key`), CSRF `X-CSRF-Token` untuk mutasi cookie-based.
 - `routes_jobs.py` — `POST/GET /jobs`, `DELETE/PATCH /jobs/{id}`, `POST /jobs/{id}/run`.
 - `routes_tasks.py` — `POST /tasks`, `GET /tasks/{id}`.
 - `routes_approvals.py` — `GET /approvals/pending`, `POST /approvals/{id}/approve|deny`.
@@ -128,13 +128,13 @@ Multi-agent AI orchestrator (Indonesian). Identity: **Ayesh** ("Aku adalah Ayesh
 - `src/memory/optimized_hybrid.py` — hybrid Redis+Postgres memory with summarization.
 - `src/memory/summarizer.py` — conversation summarizer.
 - `src/integrations/telegram.py` — bot via aiogram 3.x (`TELEGRAM_BOT_TOKEN`); run: `python -m src.integrations.telegram`.
-- `ops/backup.py` — backup/restore JSON 25 tabel auth/identitas+uang (`python -m ops.backup backup/restore`).
+- `ops/backup.py` — backup/restore JSON 26 tabel auth/identitas+uang (`python -m ops.backup backup/restore`).
 - `ops/retention.py` — data retention (`python -m ops.retention`).
 - `install_agents.py` — cross-OS installer: reads `~/.agents/*.md`, applies selected as `.ayesh/skills/`.
 - `manage_keywords.py` — CLI for managing routing keywords in DB.
 - `.ayesh/` — prompt content bundle: `skills/` (invokable skills) + `rules/` (SOP/policy markdown).
 - `data/*.txt` — RAG source documents. Re-ingest after editing.
-- `tests/` — 717 tests (unittest, fast, no LLM/infra) + end-to-end eval + security regression.
+- `tests/` — 749 tests (unittest, fast, no LLM/infra) + end-to-end eval + security regression.
 - `tests/load/locustfile.py` — load test Locust: user infra (`/health`, `/metrics`, `/metrics/prometheus`) + opsional `POST /chat` bila `LOADTEST_CHAT=1`. Run: server hidup dulu, lalu `locust -f tests/load/locustfile.py --host http://localhost:8080 -u 10 -r 2 -t 60s --headless --csv=load_results`. 429 (rate limit) dihitung terpisah, bukan failure. Dependensi: `locust` di `requirements.txt`.
 - **Mutation testing**: `mutmut` 2.x (di-pin `>=2.5.1,<3` di `requirements.txt` — v3 tidak jalan native di Windows, issue boxed/mutmut#397; WSL hanya fallback). Config `[tool.mutmut]` di `pyproject.toml` (default mutate `src/core/llm/task_routing.py`, runner = interpreter venv eksplisit karena `python` di PATH bisa saja alias Store/beda env). Per modul lain: `.\venv\Scripts\mutmut.exe run --paths-to-mutate src/...` (di Linux/WSL: `--runner "venv/bin/python -m pytest -x --assert=plain"`). Hasil: `mutmut results`, diff: `mutmut results <id>`, HTML: `mutmut html`. Gate CI: `mutmut jenkins` (exit≠0 bila ada survived). Cache di `.mutmut-cache` (gitignored). Baseline `task_routing.py`: 61 mutant, **55 killed (90%)**; 6 survivor tersisa = mutant setara (alias default/`or` identik perilaku, mustahil dibunuh test).
 - `tests/factories.py` — factory_boy factories untuk semua model ORM (`factory build()` tanpa infra; DB-session opt-in via `tests/conftest.py` + `pytest_factoryboy.register`). Test: `tests/test_factories.py` (unittest, no-DB). Dependensi test: `factory-boy`, `pytest-factoryboy` di `requirements.txt`.

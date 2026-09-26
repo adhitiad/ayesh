@@ -64,7 +64,7 @@ curl -X POST http://127.0.0.1:8080/chat \
 | `src/config/` | Rules, routing keywords (DB-backed) |
 | `src/ops/` | Backup/restore, data retention |
 | `.ayesh/` | Skill & SOP markdown (install via `install_agents.py`) |
-| `tests/` | 717 tes (cepat) + eval end-to-end + security regression |
+ | `tests/` | 749 tes (cepat) + eval end-to-end + security regression |
 
 ## Dokumentasi
 
@@ -75,7 +75,7 @@ curl -X POST http://127.0.0.1:8080/chat \
 ## Tes & Linting
 
 ```bash
-python -m unittest discover -s tests   # 717 tes cepat, wajib lolos tiap ubah prompt
+python -m unittest discover -s tests   # 749 tes cepat, wajib lolos tiap ubah prompt
 ruff check .                            # linting (config di .ruff.toml)
 python -m tests.run_eval               # end-to-end (butuh PG + Redis + LLM)
 ```

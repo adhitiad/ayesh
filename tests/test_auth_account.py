@@ -17,6 +17,7 @@ from src.core.auth.account import (
     confirm_email_verification,
     confirm_password_reset,
     confirm_totp,
+    delete_account_self,
     disable_totp,
     enable_totp,
     get_account,
@@ -24,14 +25,19 @@ from src.core.auth.account import (
     issue_2fa_challenge,
     issue_password_reset,
     link_oauth_identity,
+    list_linked_accounts,
+    regenerate_backup_codes,
     register_with_password,
     resend_verification,
     resolve_2fa_challenge,
+    unlink_oauth_provider,
+    update_display_name,
     verify_user_totp,
 )
+from src.core.auth.auth_db import backfill_oauth_accounts
 from src.core.auth.passwords import verify_password
 from src.core.db.db_engine import get_session
-from src.core.db.models import AuthSession, AuthToken, User
+from src.core.db.models import AuthOAuthAccount, AuthSession, AuthToken, User
 
 _ENV = patch.dict(
     os.environ,
@@ -52,6 +58,7 @@ def setUpModule():
 def tearDownModule():
     _ENV.stop()
     with get_session() as db:
+        db.query(AuthOAuthAccount).filter(AuthOAuthAccount.user_id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
         db.query(AuthSession).filter(AuthSession.user_id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
         db.query(AuthToken).filter(AuthToken.user_id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
         db.query(User).filter(User.id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
@@ -266,15 +273,36 @@ class TestOAuthLink(unittest.TestCase):
         user2 = link_oauth_identity(dict(profile, email=f"other-{email}"))
         self.assertEqual(user1["id"], user2["id"])
 
-    def test_email_in_use_by_other_provider(self):
+    def test_multi_provider_link_allowed(self):
+        """W9e: email sama boleh punya banyak provider (menimpa aturan lama W9d)."""
         email = _email()
         first = link_oauth_identity(
-            {"provider": "google", "provider_user_id": "g2", "email": email, "name": "X", "email_verified": True}
+            {"provider": "google", "provider_user_id": f"g2-{uuid.uuid4().hex[:8]}", "email": email, "name": "X", "email_verified": True}
+        )
+        _KNOWN_UIDS.append(first["id"])
+        second = link_oauth_identity(
+            {"provider": "github", "provider_user_id": f"gh2-{uuid.uuid4().hex[:8]}", "email": email, "name": "G", "email_verified": True}
+        )
+        self.assertEqual(second["id"], first["id"])
+        account = get_account(first["id"])
+        self.assertEqual(account["connected_providers"], ["github", "google"])
+
+    def test_email_in_use_same_provider_new_id(self):
+        """Identitas terikat ke provider yang sama tapi provider_id lain → tetap email_in_use."""
+        email = _email()
+        first = link_oauth_identity(
+            {"provider": "google", "provider_user_id": f"g2-{uuid.uuid4().hex[:8]}", "email": email, "name": "X", "email_verified": True}
         )
         _KNOWN_UIDS.append(first["id"])
         with self.assertRaises(ValueError) as ctx:
             link_oauth_identity(
-                {"provider": "github", "provider_user_id": "gh2", "email": email, "name": "G", "email_verified": True}
+                {
+                    "provider": "google",
+                    "provider_user_id": f"g-other-{uuid.uuid4().hex[:8]}",
+                    "email": email,
+                    "name": "Y",
+                    "email_verified": True,
+                }
             )
         self.assertEqual(str(ctx.exception), "email_in_use")
 
@@ -379,6 +407,128 @@ class TestOAuthEmailVerifiedGate(unittest.TestCase):
             )
         self.assertEqual(str(ctx.exception), "email_unverified")
         self.assertIsNone(get_user_by_email(email))
+
+
+class TestMultiProviderBackfillW9e(unittest.TestCase):
+    """W9e: backfill legacy → auth_oauth_accounts (idempoten)."""
+
+    def test_backfill_legacy_identity(self):
+        result = _register()
+        uid = result["account"]["id"]
+        pid = f"g-bf-{uuid.uuid4().hex[:8]}"
+        with get_session() as db:
+            row = db.query(User).filter(User.id == uid).one()
+            row.auth_provider = "google"
+            row.oauth_provider_id = pid
+            row.email_verified = True
+            db.commit()
+        self.assertGreaterEqual(backfill_oauth_accounts(), 1)
+        with get_session() as db:
+            rows = db.query(AuthOAuthAccount).filter(AuthOAuthAccount.user_id == uid).all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(str(rows[0].provider), "google")
+            self.assertEqual(str(rows[0].provider_id), pid)
+            self.assertTrue(bool(rows[0].email_verified))
+        # idempoten: panggil ulang tidak menggandakan baris
+        self.assertEqual(backfill_oauth_accounts(), 0)
+
+
+class TestSelfServiceW6(unittest.TestCase):
+    """W6: profil, backup code, hapus-akun mandiri (unit)."""
+
+    def setUp(self):
+        self.email = _email()
+        self.result = _register(email=self.email)
+        self.uid = self.result["account"]["id"]
+        confirm_email_verification(self.result["email_verify_token"])
+
+    def test_update_display_name(self):
+        account = update_display_name(self.uid, "  Nama Baru  ")
+        self.assertEqual(account["name"], "Nama Baru")
+        self.assertEqual(account["email"], self.email)
+        with self.assertRaises(ValueError):
+            update_display_name(self.uid, "   ")
+        self.assertIsNone(update_display_name("no-such-user-id", "X"))
+
+    def test_regenerate_requires_and_rotates_codes(self):
+        self.assertIsNone(regenerate_backup_codes(self.uid))
+        secret = pyotp.random_base32()
+        enable_totp(self.uid, secret)
+        old = confirm_totp(self.uid, pyotp.TOTP(secret).now())
+        self.assertIsNotNone(old)
+        new = regenerate_backup_codes(self.uid)
+        self.assertEqual(len(new), 10)
+        self.assertFalse(set(new) & set(old))
+        ok, _ = verify_user_totp(self.uid, new[0])
+        self.assertTrue(ok)
+        stale, _ = verify_user_totp(self.uid, old[0])
+        self.assertFalse(stale)
+
+    def test_delete_account_self_gates(self):
+        self.assertEqual(delete_account_self(self.uid, "wrong-pass"), "bad_password")
+        with get_session() as db:
+            db.query(User).filter(User.id == self.uid).one().password_hash = None
+            db.commit()
+        self.assertEqual(delete_account_self(self.uid, _PW), "no_password")
+
+    def test_delete_account_self_ok(self):
+        self.assertIsNone(delete_account_self(self.uid, _PW))
+        with get_session() as db:
+            row = db.query(User).filter(User.id == self.uid).one()
+            self.assertFalse(row.active)
+            self.assertNotEqual(row.email, self.email)
+            self.assertIsNone(row.password_hash)
+        uid, err = authenticate_password(self.email, _PW)
+        self.assertIsNone(uid)
+        self.assertIsNotNone(err)
+
+
+class TestLinkedAccountsW9e(unittest.TestCase):
+    """W9e: list_linked_accounts + unlink guard (unit)."""
+
+    def setUp(self):
+        self.result = _register()
+        self.uid = self.result["account"]["id"]
+
+    def _link(self, provider: str) -> None:
+        with get_session() as db:
+            db.add(
+                AuthOAuthAccount(
+                    user_id=self.uid,
+                    provider=provider,
+                    provider_id=f"{provider}-{uuid.uuid4().hex[:8]}",
+                    email=self.result["account"]["email"],
+                    email_verified=True,
+                )
+            )
+            db.commit()
+
+    def test_list_table_then_legacy(self):
+        self.assertEqual(list_linked_accounts(self.uid), [])
+        self._link("google")
+        with get_session() as db:
+            row = db.query(User).filter(User.id == self.uid).one()
+            row.auth_provider = "github"
+            row.oauth_provider_id = "gh-legacy-1"
+            db.commit()
+        providers = [a["provider"] for a in list_linked_accounts(self.uid)]
+        self.assertEqual(providers, ["google", "github"])
+
+    def test_unlink_guards(self):
+        self.assertEqual(unlink_oauth_provider(self.uid, "bogus"), "not_found")
+        self.assertEqual(unlink_oauth_provider(self.uid, "google"), "not_found")
+        # OAuth-only + satu koneksi → last_provider (anti orphan)
+        self._link("google")
+        with get_session() as db:
+            db.query(User).filter(User.id == self.uid).one().password_hash = None
+            db.commit()
+        self.assertEqual(unlink_oauth_provider(self.uid, "google"), "last_provider")
+        # multi-provider → boleh lepas satu
+        self._link("github")
+        self.assertIsNone(unlink_oauth_provider(self.uid, "google"))
+        self.assertEqual([a["provider"] for a in list_linked_accounts(self.uid)], ["github"])
+        # tersisa satu tanpa password → ditolak
+        self.assertEqual(unlink_oauth_provider(self.uid, "github"), "last_provider")
 
 
 if __name__ == "__main__":

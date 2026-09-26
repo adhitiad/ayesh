@@ -138,10 +138,64 @@ def revoke_all_user_sessions(user_id: str, keep_token: str | None = None) -> int
         for row in rows:
             if keep_hash and row.token_hash == keep_hash:
                 continue
-            row.revoked_at = now  # type: ignore[assignment]
+            row.revoked_at = now
             count += 1
         db.commit()
         return count
+
+
+def list_user_sessions(user_id: str, current_token: str | None = None) -> list[dict]:
+    """Sesi aktif milik user (revoked/expired dikeluarkan) + flag `current`.
+
+    DB error merambat (fail-closed): daftar sesi gagal → request gagal,
+    bukan diam-diam return daftar kosong.
+    """
+    _ensure()
+    from src.core.db.db_engine import get_session
+    from src.core.db.models import AuthSession
+
+    cur_hash = _hash(current_token) if current_token else None
+    now = _utcnow()
+    with get_session() as db:
+        rows = (
+            db.query(AuthSession)
+            .filter(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+            .order_by(AuthSession.created_at.desc())
+            .all()
+        )
+        out: list[dict] = []
+        for row in rows:
+            if row.expires_at is None or row.expires_at <= now:
+                continue
+            out.append(
+                {
+                    "id": str(row.id),
+                    "ip": row.ip,
+                    "user_agent": row.user_agent,
+                    "created_at": row.created_at,
+                    "last_active_at": row.last_active_at,
+                    "expires_at": row.expires_at,
+                    "current": bool(cur_hash and hmac.compare_digest(str(row.token_hash), cur_hash)),
+                }
+            )
+        return out
+
+
+def revoke_session_by_id(user_id: str, session_id: str) -> bool:
+    """Revoke satu sesi berdasarkan id. Ownership ikut di query (anti IDOR)."""
+    if not session_id:
+        return False
+    _ensure()
+    from src.core.db.db_engine import get_session
+    from src.core.db.models import AuthSession
+
+    with get_session() as db:
+        row = db.query(AuthSession).filter(AuthSession.id == session_id, AuthSession.user_id == user_id).first()
+        if not row or row.revoked_at is not None:
+            return False
+        row.revoked_at = _utcnow()  # type: ignore[assignment]
+        db.commit()
+        return True
 
 
 # ── Cookie helpers ─────────────────────────────────────────────────────

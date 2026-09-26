@@ -67,7 +67,16 @@ curl -X POST http://localhost:8080/auth/login \
 ### Login pakai Google / GitHub
 `GET /auth/oauth/google` atau `GET /auth/oauth/github` → halaman provider → kembali otomatis
 ke situs dengan sesi terpasang. Bila email OAuth belum terverifikasi di provider, sistem
-menolak (fail-closed) — verifikasi dulu di akun Google/GitHub Anda.
+menolak (fail-closed) — verifikasi dulu di akun Google/GitHub Anda. Satu akun bisa menghubungkan
+Google **dan** GitHub sekaligus (multi-provider).
+
+### Kelola akun (sudah login)
+- Ganti nama tampilan: `PATCH /auth/me {"name":"Nama Baru"}` (email/username tidak lewat sini).
+- Lihat sesi aktif: `GET /auth/sessions`; cabut sesi tertentu: `DELETE /auth/sessions/{session_id}`.
+- Kelola koneksi OAuth: `GET /auth/linked-accounts`; lepas satu: `DELETE /auth/linked-accounts/{provider}`
+  (provider terakhir pada akun OAuth-only tidak bisa dilepas — akun jadi tak bisa login).
+- Bikin ulang backup code 2FA (10 baru, lama hangus): `POST /auth/2fa/backup/regenerate {"password":"..."}`.
+- Hapus akun sendiri (permanen): `DELETE /auth/me {"password":"..."}` + `{"code":"..."}` bila 2FA aktif.
 
 ### Keluar
 `POST /auth/logout` → cookie dibersihkan (aman dipanggil berulang).

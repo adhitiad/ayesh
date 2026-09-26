@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from api_server import app
 from src.core.db.db_engine import get_session
-from src.core.db.models import AuthSession, AuthToken, User
+from src.core.db.models import AuthOAuthAccount, AuthSession, AuthToken, User
 from src.core.system.rate_limit import _scope_for_path, check_rate_limit
 
 _KNOWN_UIDS: list[str] = []
@@ -43,6 +43,7 @@ def setUpModule():
 def tearDownModule():
     _ENV.stop()
     with get_session() as db:
+        db.query(AuthOAuthAccount).filter(AuthOAuthAccount.user_id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
         db.query(AuthSession).filter(AuthSession.user_id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
         db.query(AuthToken).filter(AuthToken.user_id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
         db.query(User).filter(User.id.in_(_KNOWN_UIDS)).delete(synchronize_session=False)
@@ -569,6 +570,334 @@ class TestOAuthUnverifiedGateRoute(unittest.TestCase):
         self.assertFalse(any("ayesh_session=" in c for c in cb.headers.get_list("set-cookie")))
         with get_session() as db:
             self.assertIsNone(db.query(User).filter(User.email == email).first())
+
+
+class TestSessionManagement(unittest.TestCase):
+    """W6: daftar & revoke sesi aktif (ownership-scoped, CSRF, fail-closed)."""
+
+    def setUp(self):
+        self.client = _client()
+        self.email = _email()
+        _register_verified(self.client, self.email)
+        login = self.client.post("/auth/login", json={"email": self.email, "password": _PW})
+        self.assertEqual(login.status_code, 200, login.text)
+        self.csrf = self.client.cookies.get("ayesh_csrf")
+
+    def test_list_sessions_marks_current(self):
+        r = self.client.get("/auth/sessions")
+        self.assertEqual(r.status_code, 200, r.text)
+        sessions = r.json()["sessions"]
+        self.assertEqual(r.json()["count"], len(sessions))
+        self.assertGreaterEqual(len(sessions), 1)
+        self.assertTrue(any(s["current"] for s in sessions))
+        for key in ("id", "ip", "user_agent", "created_at", "last_active_at", "expires_at", "current"):
+            self.assertIn(key, sessions[0])
+
+    def test_revoke_other_session_kills_it(self):
+        other = _client()
+        self.assertEqual(other.post("/auth/login", json={"email": self.email, "password": _PW}).status_code, 200)
+        mine = self.client.get("/auth/sessions").json()["sessions"]
+        self.assertEqual(len(mine), 2)
+        target = next(s for s in mine if not s["current"])
+        d = self.client.delete(f"/auth/sessions/{target['id']}", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(d.status_code, 200, d.text)
+        self.assertFalse(d.json()["current"])
+        self.assertEqual(other.get("/auth/me").status_code, 401)
+        self.assertEqual(self.client.get("/auth/sessions").json()["count"], 1)
+
+    def test_revoke_foreign_session_404(self):
+        other = _client()
+        email_b = _email()
+        _register_verified(other, email_b)
+        self.assertEqual(other.post("/auth/login", json={"email": email_b, "password": _PW}).status_code, 200)
+        sid_b = other.get("/auth/sessions").json()["sessions"][0]["id"]
+        d = self.client.delete(f"/auth/sessions/{sid_b}", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(d.status_code, 404, d.text)
+        self.assertEqual(other.get("/auth/me").status_code, 200)
+
+    def test_revoke_unknown_404(self):
+        d = self.client.delete(
+            "/auth/sessions/00000000-0000-0000-0000-000000000000", headers={"X-CSRF-Token": self.csrf}
+        )
+        self.assertEqual(d.status_code, 404)
+
+    def test_revoke_requires_csrf(self):
+        d = self.client.delete("/auth/sessions/xyz")
+        self.assertEqual(d.status_code, 403)
+        self.assertEqual(d.json()["error"], "csrf_token")
+
+    def test_revoke_current_clears_cookies(self):
+        cur = next(s for s in self.client.get("/auth/sessions").json()["sessions"] if s["current"])
+        d = self.client.delete(f"/auth/sessions/{cur['id']}", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(d.status_code, 200, d.text)
+        self.assertTrue(d.json()["current"])
+        self.assertEqual(self.client.get("/auth/me").status_code, 401)
+
+
+class TestUpdateMe(unittest.TestCase):
+    """W6: PATCH /auth/me — display name saja (email change alur terpisah)."""
+
+    def setUp(self):
+        self.client = _client()
+        self.email = _email()
+        _register_verified(self.client, self.email)
+        login = self.client.post("/auth/login", json={"email": self.email, "password": _PW})
+        self.assertEqual(login.status_code, 200, login.text)
+        self.csrf = self.client.cookies.get("ayesh_csrf")
+
+    def test_patch_name_ok_persists(self):
+        r = self.client.patch("/auth/me", json={"name": "Nama Baru"}, headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["name"], "Nama Baru")
+        me = self.client.get("/auth/me")
+        self.assertEqual(me.json()["name"], "Nama Baru")
+        self.assertEqual(me.json()["email"], self.email)
+
+    def test_patch_requires_csrf(self):
+        r = self.client.patch("/auth/me", json={"name": "X"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error"], "csrf_token")
+
+    def test_patch_requires_auth(self):
+        r = _client().patch("/auth/me", json={"name": "X"})
+        self.assertEqual(r.status_code, 401)
+
+    def test_patch_blank_name_422(self):
+        r = self.client.patch("/auth/me", json={"name": "   "}, headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(r.status_code, 422)
+
+
+class TestDeleteAccountSelf(unittest.TestCase):
+    """W6: DELETE /auth/me — hard-gate password + 2FA, soft-delete anonim, fail-closed."""
+
+    def setUp(self):
+        self.client = _client()
+        self.email = _email()
+        self.account = _register_verified(self.client, self.email)
+        login = self.client.post("/auth/login", json={"email": self.email, "password": _PW})
+        self.assertEqual(login.status_code, 200, login.text)
+        self.csrf = self.client.cookies.get("ayesh_csrf")
+
+    def _delete(self, payload: dict, client=None):
+        return (client or self.client).request("DELETE", "/auth/me", json=payload, headers={"X-CSRF-Token": self.csrf})
+
+    def test_requires_csrf(self):
+        r = self.client.request("DELETE", "/auth/me", json={"password": _PW})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error"], "csrf_token")
+
+    def test_wrong_password_keeps_account(self):
+        r = self._delete({"password": "wrong-pass-99"})
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertIn("salah", r.json()["detail"])
+        self.assertEqual(self.client.get("/auth/me").status_code, 200)
+
+    def test_delete_ok_soft_delete_and_anonymize(self):
+        r = self._delete({"password": _PW})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["status"], "deleted")
+        # cookie dibersihkan → sesi mati
+        self.assertEqual(self.client.get("/auth/me").status_code, 401)
+        # login ulang dengan email lama gagal
+        fresh = _client()
+        again = fresh.post("/auth/login", json={"email": self.email, "password": _PW})
+        self.assertEqual(again.status_code, 401, again.text)
+        # DB: nonaktif, email dianonimkan, kredensial dicabut
+        with get_session() as db:
+            row = db.query(User).filter(User.id == self.account["id"]).one()
+            self.assertFalse(row.active)
+            self.assertNotEqual(row.email, self.email)
+            self.assertIsNone(row.password_hash)
+            self.assertIsNone(row.username)
+            self.assertIsNone(row.totp_secret)
+
+    def test_oauth_only_without_password_400(self):
+        with get_session() as db:
+            row = db.query(User).filter(User.id == self.account["id"]).one()
+            row.password_hash = None
+            db.commit()
+        r = self._delete({"password": _PW})
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertIn("OAuth-only", r.json()["detail"])
+        self.assertEqual(self.client.get("/auth/me").status_code, 200)
+
+    def test_delete_with_2fa_requires_valid_code(self):
+        setup = self.client.post("/auth/2fa/setup", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(setup.status_code, 200, setup.text)
+        secret = setup.json()["secret"]
+        confirm = self.client.post(
+            "/auth/2fa/confirm", json={"code": pyotp.TOTP(secret).now()}, headers={"X-CSRF-Token": self.csrf}
+        )
+        self.assertEqual(confirm.status_code, 200, confirm.text)
+        # tanpa kode → ditolak
+        r1 = self._delete({"password": _PW})
+        self.assertEqual(r1.status_code, 400, r1.text)
+        self.assertIn("2FA aktif", r1.json()["detail"])
+        # kode salah → ditolak
+        r2 = self._delete({"password": _PW, "code": "000000"})
+        self.assertEqual(r2.status_code, 400, r2.text)
+        # kode benar → terhapus
+        r3 = self._delete({"password": _PW, "code": pyotp.TOTP(secret).now()})
+        self.assertEqual(r3.status_code, 200, r3.text)
+
+
+class TestBackupRegenerate(unittest.TestCase):
+    """W6: POST /auth/2fa/backup/regenerate — 10 kode baru, kode lama tak berlaku."""
+
+    def setUp(self):
+        self.client = _client()
+        self.email = _email()
+        _register_verified(self.client, self.email)
+        login = self.client.post("/auth/login", json={"email": self.email, "password": _PW})
+        self.assertEqual(login.status_code, 200, login.text)
+        self.csrf = self.client.cookies.get("ayesh_csrf")
+
+    def test_requires_2fa(self):
+        r = self.client.post("/auth/2fa/backup/regenerate", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertIn("2FA", r.json()["detail"])
+
+    def test_requires_csrf(self):
+        r = self.client.post("/auth/2fa/backup/regenerate")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error"], "csrf_token")
+
+    def test_regenerate_invalidates_old_codes(self):
+        setup = self.client.post("/auth/2fa/setup", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(setup.status_code, 200, setup.text)
+        secret = setup.json()["secret"]
+        confirm = self.client.post(
+            "/auth/2fa/confirm", json={"code": pyotp.TOTP(secret).now()}, headers={"X-CSRF-Token": self.csrf}
+        )
+        old = confirm.json()["backup_codes"]
+        self.assertEqual(len(old), 10)
+
+        r = self.client.post("/auth/2fa/backup/regenerate", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(r.status_code, 200, r.text)
+        new = r.json()["backup_codes"]
+        self.assertEqual(len(new), 10)
+        self.assertRegex(new[0], r"^[0-9A-F]{4}-[0-9A-F]{4}$")
+        self.assertFalse(set(new) & set(old))
+
+        # kode lama ditolak (challenge sekali pakai → login ulang untuk kode baru)
+        fresh = _client()
+        login1 = fresh.post("/auth/login", json={"email": self.email, "password": _PW})
+        self.assertEqual(login1.json()["status"], "2fa_required")
+        bad = fresh.post("/auth/login/2fa", json={"challenge": login1.json()["challenge"], "code": old[0]})
+        self.assertEqual(bad.status_code, 401, bad.text)
+        login2 = fresh.post("/auth/login", json={"email": self.email, "password": _PW})
+        ok = fresh.post("/auth/login/2fa", json={"challenge": login2.json()["challenge"], "code": new[0]})
+        self.assertEqual(ok.status_code, 200, ok.text)
+
+
+class TestLinkedAccountsRoutes(unittest.TestCase):
+    """W9e: GET/DELETE /auth/linked-accounts — daftar, unlink, guard koneksi terakhir."""
+
+    def setUp(self):
+        self.client = _client()
+        self.email = _email()
+        self.account = _register_verified(self.client, self.email)
+        login = self.client.post("/auth/login", json={"email": self.email, "password": _PW})
+        self.assertEqual(login.status_code, 200, login.text)
+        self.csrf = self.client.cookies.get("ayesh_csrf")
+
+    def _link_row(self, provider: str) -> str:
+        pid = f"{provider}-{uuid.uuid4().hex[:8]}"
+        with get_session() as db:
+            db.add(
+                AuthOAuthAccount(
+                    user_id=self.account["id"],
+                    provider=provider,
+                    provider_id=pid,
+                    email=self.email,
+                    email_verified=True,
+                )
+            )
+            db.commit()
+        return pid
+
+    def test_list_empty_then_after_link(self):
+        r = self.client.get("/auth/linked-accounts")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["accounts"], [])
+        self.assertEqual(r.json()["count"], 0)
+        self._link_row("google")
+        r2 = self.client.get("/auth/linked-accounts")
+        self.assertEqual(r2.status_code, 200)
+        accounts = r2.json()["accounts"]
+        self.assertEqual(len(accounts), 1)
+        self.assertEqual(accounts[0]["provider"], "google")
+        self.assertTrue(accounts[0]["email_verified"])
+        self.assertEqual(accounts[0]["email"], self.email)
+
+    def test_unlink_with_password_ok(self):
+        self._link_row("google")
+        r = self.client.delete("/auth/linked-accounts/google", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["status"], "unlinked")
+        self.assertEqual(self.client.get("/auth/linked-accounts").json()["count"], 0)
+
+    def test_unlink_requires_csrf(self):
+        self._link_row("google")
+        r = self.client.delete("/auth/linked-accounts/google")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error"], "csrf_token")
+
+    def test_unlink_unknown_404(self):
+        r = self.client.delete("/auth/linked-accounts/github", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(r.status_code, 404, r.text)
+
+    def test_unlink_requires_auth(self):
+        r = _client().delete("/auth/linked-accounts/google", headers={"X-CSRF-Token": "x"})
+        self.assertEqual(r.status_code, 401)
+
+    def test_unlink_last_provider_oauth_only_guard(self):
+        """OAuth-only: koneksi terakhir tak boleh dilepas; multi-provider (W9e) boleh dilepas satu-satu."""
+        oauth_client = _client()
+        oauth_email = _email()
+        with (
+            patch.dict(os.environ, _OAUTH_ENABLED_ENV),
+            patch("src.core.auth.oauth.httpx.AsyncClient", _FakeAsyncClient),
+        ):
+            _FakeAsyncClient.userinfo = {
+                "sub": f"g-{uuid.uuid4().hex[:8]}",
+                "email": oauth_email,
+                "email_verified": True,
+                "name": "OAuthOnly",
+            }
+            state = _oauth_state(oauth_client)
+            cb = oauth_client.get(f"/auth/oauth/google/callback?code=unit-code&state={state}", follow_redirects=False)
+        self.assertEqual(cb.status_code, 302, cb.text)
+        self.assertIn("auth=ok", cb.headers["location"])
+        uid = oauth_client.get("/auth/me").json()["id"]
+        _KNOWN_UIDS.append(uid)
+        csrf = oauth_client.cookies.get("ayesh_csrf")
+
+        # satu-satunya koneksi, tanpa password → ditolak (anti orphan)
+        un1 = oauth_client.delete("/auth/linked-accounts/google", headers={"X-CSRF-Token": csrf})
+        self.assertEqual(un1.status_code, 400, un1.text)
+        self.assertIn("terakhir", un1.json()["detail"])
+
+        # provider kedua terpasang (multi-provider) → koneksi pertama boleh dilepas
+        with get_session() as db:
+            db.add(
+                AuthOAuthAccount(
+                    user_id=uid,
+                    provider="github",
+                    provider_id=f"gh-{uuid.uuid4().hex[:8]}",
+                    email=oauth_email,
+                    email_verified=True,
+                )
+            )
+            db.commit()
+        un2 = oauth_client.delete("/auth/linked-accounts/google", headers={"X-CSRF-Token": csrf})
+        self.assertEqual(un2.status_code, 200, un2.text)
+        remaining = oauth_client.get("/auth/linked-accounts").json()["accounts"]
+        self.assertEqual([a["provider"] for a in remaining], ["github"])
+
+        # github kini satu-satunya tanpa password → ditolak lagi
+        un3 = oauth_client.delete("/auth/linked-accounts/github", headers={"X-CSRF-Token": csrf})
+        self.assertEqual(un3.status_code, 400, un3.text)
 
 
 if __name__ == "__main__":

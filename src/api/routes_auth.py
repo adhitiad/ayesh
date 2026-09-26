@@ -16,9 +16,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from src.api.models import (
+    AuthAccountDeleteRequest,
     AuthEmailVerifyRequest,
     AuthLogin2FARequest,
     AuthLoginRequest,
+    AuthMeUpdateRequest,
     AuthPasswordChangeRequest,
     AuthPasswordResetConfirmRequest,
     AuthPasswordResetRequest,
@@ -34,15 +36,20 @@ from src.core.auth.account import (
     confirm_email_verification,
     confirm_password_reset,
     confirm_totp,
+    delete_account_self,
     disable_totp,
     enable_totp,
     get_account,
     issue_2fa_challenge,
     issue_password_reset,
     link_oauth_identity,
+    list_linked_accounts,
+    regenerate_backup_codes,
     register_with_password,
     resend_verification,
     resolve_2fa_challenge,
+    unlink_oauth_provider,
+    update_display_name,
     verify_user_totp,
 )
 from src.core.auth.auth import require_authenticated
@@ -53,10 +60,13 @@ from src.core.auth.passwords import password_policy_ok
 from src.core.auth.sessions import (
     clear_session_cookies,
     create_session,
+    list_user_sessions,
     read_session_token,
     revoke_all_user_sessions,
     revoke_session,
+    revoke_session_by_id,
     set_session_cookie,
+    verify_session,
 )
 from src.core.auth.totp import generate_totp_secret, totp_uri
 from src.core.observability.prometheus_metrics import record_auth_event
@@ -220,6 +230,101 @@ def auth_me(request: Request):
     return account
 
 
+# ── W6: sesi, profil, hapus-akun ───────────────────────────────────────
+
+
+@router.get("/sessions")
+def auth_sessions_list(request: Request):
+    require_authenticated(request)
+    token = read_session_token(request)
+    sessions = list_user_sessions(get_current_user(), token)
+    return {"sessions": sessions, "count": len(sessions)}
+
+
+@router.delete("/sessions/{session_id}")
+def auth_session_revoke(request: Request, session_id: str):
+    require_authenticated(request)
+    uid = get_current_user()
+    token = read_session_token(request)
+    current = verify_session(token) if token else None
+    if not revoke_session_by_id(uid, session_id):
+        record_auth_event("session_revoke", "not_found")
+        raise HTTPException(status_code=404, detail="Sesi tidak ditemukan.")
+    is_current = bool(current and str(current["id"]) == session_id)
+    record_auth_event("session_revoke", "ok")
+    _auth_audit("session_revoke", actor=uid, details={"current": is_current})
+    resp = JSONResponse({"status": "revoked", "current": is_current})
+    if is_current:
+        clear_session_cookies(resp)
+    return resp
+
+
+@router.patch("/me")
+def auth_me_update(request: Request, body: AuthMeUpdateRequest):
+    require_authenticated(request)
+    uid = get_current_user()
+    try:
+        account = update_display_name(uid, body.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not account:
+        raise HTTPException(status_code=404, detail="Akun tidak ditemukan.")
+    record_auth_event("account_update", "ok")
+    _auth_audit("account_update", actor=uid)
+    return account
+
+
+@router.delete("/me")
+def auth_me_delete(request: Request, body: AuthAccountDeleteRequest):
+    require_authenticated(request)
+    uid = get_current_user()
+    err = delete_account_self(uid, body.password, body.code)
+    if err:
+        record_auth_event("account_delete", err)
+        _auth_audit("account_delete_failed", actor=uid, details={"reason": err})
+        messages = {
+            "no_password": "Akun tanpa password (OAuth-only) tidak bisa hapus-akun mandiri.",  # nosec B105 - kunci dict kode error, bukan kredensial
+            "bad_password": "Password salah.",  # nosec B105 - kunci dict kode error, bukan kredensial
+            "code_required": "2FA aktif — kode TOTP/backup wajib diisi.",
+            "bad_code": "Kode 2FA salah.",
+        }
+        raise HTTPException(status_code=400, detail=messages.get(err, "Gagal menghapus akun."))
+    record_auth_event("account_delete", "ok")
+    _auth_audit("account_deleted", actor=uid)
+    resp = JSONResponse({"status": "deleted"})
+    clear_session_cookies(resp)
+    return resp
+
+
+# ── W9e: koneksi OAuth (settings) ──────────────────────────────────────
+
+
+@router.get("/linked-accounts")
+def auth_linked_accounts(request: Request):
+    require_authenticated(request)
+    accounts = list_linked_accounts(get_current_user())
+    return {"accounts": accounts, "count": len(accounts)}
+
+
+@router.delete("/linked-accounts/{provider}")
+def auth_linked_account_unlink(request: Request, provider: str):
+    require_authenticated(request)
+    uid = get_current_user()
+    err = unlink_oauth_provider(uid, provider)
+    if err == "last_provider":
+        record_auth_event("oauth_unlink", "denied")
+        raise HTTPException(
+            status_code=400,
+            detail="Koneksi terakhir tidak bisa dilepas — tambah password atau provider lain dulu.",
+        )
+    if err:
+        record_auth_event("oauth_unlink", "not_found")
+        raise HTTPException(status_code=404, detail="Koneksi tidak ditemukan.")
+    record_auth_event("oauth_unlink", "ok")
+    _auth_audit("oauth_unlink", actor=uid, details={"provider": provider})
+    return {"status": "unlinked", "provider": provider}
+
+
 @router.post("/email/verify")
 def auth_email_verify(body: AuthEmailVerifyRequest):
     if not confirm_email_verification(body.token):
@@ -335,6 +440,20 @@ def auth_2fa_disable(request: Request, body: AuthTotpDisableRequest):
     record_auth_event("totp_disable", "ok")
     _auth_audit("totp_disable", actor=uid, details={"revoked_sessions": revoked})
     return {"status": "disabled", "revoked_sessions": revoked}
+
+
+@router.post("/2fa/backup/regenerate")
+def auth_backup_regenerate(request: Request):
+    """Bikin ulang 10 backup code — kode lama langsung tak berlaku (W6)."""
+    require_authenticated(request)
+    uid = get_current_user()
+    codes = regenerate_backup_codes(uid)
+    if codes is None:
+        record_auth_event("backup_regenerate", "fail")
+        raise HTTPException(status_code=400, detail="2FA belum aktif.")
+    record_auth_event("backup_regenerate", "ok")
+    _auth_audit("backup_regenerate", actor=uid)
+    return {"status": "regenerated", "backup_codes": codes}
 
 
 def _safe_redirect(redirect_to: str) -> str:

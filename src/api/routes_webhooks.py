@@ -87,6 +87,9 @@ async def vip_upgrade(request: Request):
             ).fetchone()
             raw = json.dumps(data, ensure_ascii=False)[:4000]
             if existing:
+                # ref sudah terdaftar: uid harus sama — cegah ref dipakai men-vip uid lain
+                if str(existing[1]) != uid:
+                    raise HTTPException(status_code=409, detail="external_ref sudah terdaftar untuk uid lain")
                 old_status = str(existing[0])
                 already_applied = existing[2] is not None
                 # update status (pending→success, dll); paid_at tidak ditimpa saat replay

@@ -4,6 +4,7 @@ Cakup:
 - POST /webhooks/vip-upgrade: HMAC fail-closed (503 tanpa secret, 401 sig salah)
 - status=pending → insert history, user TIDAK jadi vip; status=success → vip aktif
 - replay success → already (idempotent)
+- ref terdaftar utk uid lain → 409 (ref tidak bisa dipakai men-vip uid lain)
 - GET /billing/history: 401 tanpa key, self-scope, IDOR 403 (owner boleh), filter status invalid 400
 - GET /billing/history/{ref} & /billing/status/{ref}: 404, IDOR 403, raw_payload hanya owner
 """
@@ -176,6 +177,38 @@ class TestWebhookStatusFlow(_DbCase):
             self.assertEqual(r.json()["status"], "failed")
             self.assertEqual(get_user_by_id(uid)["role"], "user")
             self.assertEqual(self._row(ref).status, "failed")
+
+
+class TestRefUIDConflict(_DbCase):
+    """Ref yang sudah terdaftar ditolak untuk uid lain (409, rollback penuh)."""
+
+    @staticmethod
+    def _row(ref: str) -> VipUpgrade | None:
+        from sqlalchemy.orm import sessionmaker
+
+        with sessionmaker(bind=get_engine())() as db:
+            return db.query(VipUpgrade).filter(VipUpgrade.external_ref == ref).first()
+
+    def test_ref_uid_beda_409(self):
+        ref = _ref("xuid")
+        uid = self.plain["id"]
+        with patch.dict(os.environ, {"VIP_WEBHOOK_SECRET": _SECRET}):
+            # 1) pending tercatat untuk plain
+            req = _wh({"uid": uid, "external_ref": ref, "status": "pending", "provider": "paymock"})
+            r = _client().post("/webhooks/vip-upgrade", content=req["body"], headers=req["headers"])
+            self.assertEqual(r.status_code, 200)
+            # 2) attacker kirim success dgn ref sama → 409
+            attacker = create_user(f"bill_att_{uuid.uuid4().hex[:8]}", "user")
+            req2 = _wh({"uid": attacker["id"], "external_ref": ref, "status": "success", "provider": "paymock"})
+            r2 = _client().post("/webhooks/vip-upgrade", content=req2["body"], headers=req2["headers"])
+            self.assertEqual(r2.status_code, 409)
+            # 3) row tidak berubah (rollback), tak ada yang jadi vip
+            row = self._row(ref)
+            self.assertEqual(row.user_id, uid)
+            self.assertEqual(row.status, "pending")
+            self.assertIsNone(row.paid_at)
+            self.assertEqual(get_user_by_id(uid)["role"], "user")
+            self.assertEqual(get_user_by_id(attacker["id"])["role"], "user")
 
 
 class TestBillingHistoryEndpoint(_DbCase):

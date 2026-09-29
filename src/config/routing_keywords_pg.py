@@ -18,6 +18,17 @@ DEFAULT_KEYWORDS: dict[str, list[str]] = {
 }
 DEFAULT_AGENT = "casual_agent"
 
+# Grant tool planning bawaan per-keyword, terpisah dari DEFAULT_KEYWORDS.
+# Sengaja TIDAK ditaruh di DEFAULT_KEYWORDS: baris keyword per-agent dipakai juga
+# oleh classify_agent, sehingga kata umum seperti "langkah" akan meng-hijack
+# klasifikasi ke agent tertentu. Cukup disuntikkan di jalur filtering tool
+# (get_routing_keywords_with_tools) sehingga agent yang sudah terklasifikasi
+# mendapat tool plan tanpa mengubah routing (alasan perubahan: eval E28/E29).
+KEYWORD_TOOL_EXTRAS: dict[str, list[str]] = {
+    "rencana": ["buat_plan", "lihat_plan", "cari_plan", "jalankan_langkah", "tandai_selesai", "batal_plan"],
+    "langkah": ["buat_plan", "lihat_plan", "cari_plan", "jalankan_langkah", "tandai_selesai", "batal_plan"],
+}
+
 
 def _load_from_file() -> tuple[dict[str, list[str]], str]:
     return DEFAULT_KEYWORDS, DEFAULT_AGENT
@@ -139,7 +150,7 @@ def get_routing_keywords_with_tools() -> tuple[dict[str, dict[str, Any]], str]:
                     result[agent] = {}
                 tools_list = tools if isinstance(tools, list) else []
                 result[agent][kw] = {"allowed_tools": tools_list}
-            return result, default_agent
+            return _merge_keyword_tool_extras(result), default_agent
         except Exception as e:
             print(f"Postgres routing keywords (with tools) gagal: {e}")
         finally:
@@ -151,7 +162,27 @@ def get_routing_keywords_with_tools() -> tuple[dict[str, dict[str, Any]], str]:
         result[agent] = {}
         for kw in kws:
             result[agent][kw] = {"allowed_tools": []}
-    return result, default_agent
+    return _merge_keyword_tool_extras(result), default_agent
+
+
+def _merge_keyword_tool_extras(result: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Suntikkan KEYWORD_TOOL_EXTRAS ke tiap agent (union, tak menimpa baris DB).
+
+    Tool divalidasi ulang lewat sanitize_keyword_tools (fail-closed: agent/tool
+    di luar TOOL_CAPABILITIES tidak pernah masuk).
+    """
+    for agent, kw_map in result.items():
+        for kw, tools in KEYWORD_TOOL_EXTRAS.items():
+            sanitized = sanitize_keyword_tools(agent, tools)
+            if not sanitized:
+                continue
+            entry = kw_map.get(kw)
+            if entry is None:
+                kw_map[kw] = {"allowed_tools": list(sanitized)}
+            else:
+                merged = entry.get("allowed_tools") or []
+                entry["allowed_tools"] = merged + [t for t in sanitized if t not in merged]
+    return result
 
 
 _VALID_AGENTS = {"coder_agent", "admin_agent", "casual_agent"}

@@ -26,7 +26,7 @@ redis>=8.1.0
 python-dotenv>=1.2.3
 aiogram>=3.31.0
 grpcio>=1.84.0
-grpcio-tools>=1.84.0
+grpcio-tools>=1.84.0  # proto codegen: python -m grpc_tools.grpcio_tools protoc
 
 # P1 auth web: akun manusia (email/password, OAuth, 2FA, verifikasi email)
 argon2-cffi>=23.1.0

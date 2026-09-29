@@ -61,7 +61,7 @@ def _migrate_file_data(cur, file_keywords: dict[str, list[str]]):
         for kw in kws:
             cur.execute(
                 """INSERT INTO routing_keywords(agent, keyword, allowed_tools)
-                   VALUES (%s, %s, %s::jsonb) ON CONFLICT DO NOTHING;""",
+                   VALUES (%s, %s, %s::jsonb) ON CONFLICT (agent, keyword) DO NOTHING;""",
                 (agent, kw, tools),
             )
 
@@ -87,10 +87,13 @@ def get_routing_keywords() -> tuple[dict[str, list[str]], str]:
             cur = conn.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS routing_keywords (
+                    id VARCHAR(36) NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text),
+                    user_id VARCHAR(36) NOT NULL DEFAULT 'default',
                     agent VARCHAR(50) NOT NULL,
                     keyword VARCHAR(100) NOT NULL,
                     allowed_tools JSONB DEFAULT '[]'::jsonb,
-                    PRIMARY KEY (agent, keyword)
+                    PRIMARY KEY (id),
+                    UNIQUE (agent, keyword)
                 );
             """)
             _upgrade_table_if_needed(cur)
@@ -129,10 +132,12 @@ def get_routing_keywords_with_tools() -> tuple[dict[str, dict[str, Any]], str]:
             cur = conn.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS routing_keywords (
+                    id VARCHAR(36) NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text),
+                    user_id VARCHAR(36) NOT NULL DEFAULT 'default',
                     agent VARCHAR(50) NOT NULL,
                     keyword VARCHAR(100) NOT NULL,
                     allowed_tools JSONB DEFAULT '[]'::jsonb,
-                    PRIMARY KEY (agent, keyword)
+                    PRIMARY KEY (id)
                 );
             """)
             _upgrade_table_if_needed(cur)

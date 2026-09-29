@@ -1,6 +1,7 @@
 """File safety utilities: path validation, sensitive file detection."""
 
 import os
+import re
 from pathlib import Path
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
@@ -66,6 +67,12 @@ def _safe_path(path: str) -> tuple:
     p = (path or "").strip()
     if not p:
         return False, "Error: path kosong."
+
+    # Di POSIX backslash bukan separator, jadi path bergaya Windows (C:\..., ..\..\)
+    # "resolve" jadi file literal di dalam root dan lolos jail. Tolak konsisten di
+    # semua platform; di Windows sendiri jalur escape tertangani cek resolve di bawah.
+    if os.name != "nt" and ("\\" in p or re.match(r"^[A-Za-z]:(?:[/\\]|$)", p)):
+        return False, f"Error: path '{p}' bergaya Windows ditolak."
 
     # Resolve to canonical path (follows symlinks, normalizes ..)
     try:

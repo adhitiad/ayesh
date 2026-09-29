@@ -33,22 +33,30 @@ _ENV = patch.dict(
     },
 )
 
+_TEST_UIDS: set[str] = set()
+
 
 def setUpModule():
     _ENV.start()
 
 
 def tearDownModule():
+    # Hapus hanya sesi buatan test ini (per user_id) — delete() global akan
+    # ikut menghapus sesi login sungguhan di DB dev bersama.
     _ENV.stop()
+    if not _TEST_UIDS:
+        return
     with get_session() as db:
-        db.query(AuthSession).delete()
+        db.query(AuthSession).filter(AuthSession.user_id.in_(_TEST_UIDS)).delete(synchronize_session=False)
         db.commit()
+    _TEST_UIDS.clear()
 
 
 class TestSessionLifecycle(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.uid = str(uuid.uuid4())
+        _TEST_UIDS.add(cls.uid)
         with get_session() as db:
             db.add(
                 User(

@@ -62,10 +62,6 @@ def set_current_user_vip_expires(value: datetime | None) -> None:
     current_user_vip_expires.set(value)
 
 
-def get_current_user_vip_expires() -> datetime | None:
-    return current_user_vip_expires.get()
-
-
 def vip_expires_active() -> bool:
     """True bila masa aktif vip request berjalan belum lewat.
 

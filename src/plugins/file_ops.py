@@ -99,11 +99,6 @@ def _http_request(
             connection.close()
 
 
-def _http_error(message: str) -> str:
-    """Return a stable tool error message for rejected URLs."""
-    return f"Error: {message}"
-
-
 @tool
 def list_folder(path: str = ".") -> str:
     """Menampilkan isi dari direktori (folder)."""

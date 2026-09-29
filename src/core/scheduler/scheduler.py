@@ -221,15 +221,6 @@ def set_enabled(job_id: str, enabled: bool, owner_user_id: str = "default") -> b
         return True
 
 
-def _check_capability(job: dict, tool_name: str, args: dict | None = None) -> bool:
-    """Check if a scheduled job is allowed to use a specific tool."""
-    allowed_tools = job.get("allowed_tools", [])
-    approval_policy = job.get("approval_policy", "deny_all")
-    if approval_policy == "allow_all":
-        return True
-    return tool_name in allowed_tools
-
-
 def run_due_jobs() -> list:
     """Jalankan semua job enabled yang jatuh tempo. Return hasil per job."""
     from main import route_request

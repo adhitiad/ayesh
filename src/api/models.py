@@ -95,24 +95,6 @@ class RegisterRequest(BaseModel):
             raise ValueError("name hanya boleh huruf/angka/spasi/underscore/hyphen")
 
 
-class VipUpgradeRequest(BaseModel):
-    uid: str | None = None
-    user_id: str | None = None
-    external_ref: str
-    amount_cents: int | None = 1387
-    currency: str | None = "USD"
-
-    model_config = {"strict": True}
-
-    def model_post_init(self, __context):
-        if not self.external_ref or len(self.external_ref) > 100:
-            raise ValueError("external_ref wajib 1-100 karakter")
-        if not re.match(r"^[a-zA-Z0-9_\-]+$", self.external_ref):
-            raise ValueError("external_ref hanya huruf/angka/underscore/hyphen")
-        if self.amount_cents is not None and self.amount_cents < 0:
-            raise ValueError("amount_cents tidak boleh negatif")
-
-
 class AuthRegisterRequest(BaseModel):
     email: str
     password: str

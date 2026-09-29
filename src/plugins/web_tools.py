@@ -179,11 +179,6 @@ def _resolve_public_address(hostname: str, port: int | None = None) -> str:
     return str(infos[0][4][0]) if infos else ""
 
 
-def _resolve_and_validate(hostname: str, port: int | None = None) -> str:
-    """Return the hostname only when every resolved address is public."""
-    return hostname if _resolve_public_address(hostname, port) != "" else ""
-
-
 def _validate_url_shape(target_url: str, depth: int = 0) -> bool:
     """Validate URL syntax before performing DNS resolution."""
     if depth > _MAX_REDIRECTS:

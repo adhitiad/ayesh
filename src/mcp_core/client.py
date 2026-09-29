@@ -1,6 +1,5 @@
 """MCP Client: Mengelola koneksi ke server MCP remote."""
 
-import asyncio
 import json
 import os
 import subprocess  # nosec B404 (transport MCP stdio)
@@ -97,30 +96,6 @@ class MCPClientManager:
                 pass
 
         return StdioServerParameters(command=command, args=args, env=final_env)
-
-    async def _connect_server(self, server_name: str) -> ClientSession | None:
-        """Mencoba menghubungkan ke satu server MCP."""
-        try:
-            params = self._get_server_params(server_name)
-            read, write, _get_sid = await asyncio.wait_for(stdio_client(params).__aenter__(), timeout=30)
-            session = await asyncio.wait_for(ClientSession(read, write).__aenter__(), timeout=30)
-            await asyncio.wait_for(session.initialize(), timeout=30)
-            return session
-        except TimeoutError:
-            logger.warning(f"Timeout saat menghubungkan ke {server_name} (30 detik)")
-            return None
-        except FileNotFoundError as e:
-            logger.warning(f"Command tidak ditemukan untuk {server_name}: {e}")
-            return None
-        except Exception as e:
-            error_msg = str(e)
-            if "TaskGroup" in error_msg:
-                logger.warning(
-                    f"Server {server_name} gagal inisialisasi (kemungkinan kompatibilitas Windows): {error_msg[:100]}"
-                )
-            else:
-                logger.warning(f"Gagal menghubungkan ke {server_name}: {error_msg[:100]}")
-            return None
 
     async def list_all_tools(self) -> list[dict[str, Any]]:
         """Mengambil daftar semua tools dari semua server yang terdaftar."""

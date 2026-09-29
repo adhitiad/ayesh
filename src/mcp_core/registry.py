@@ -1,15 +1,12 @@
 """MCP Registry: Memilih plugins berdasarkan rules agent."""
 
-import asyncio
 import os
 import platform
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from src.config.rules import AGENT_RULES
-from src.mcp_core.client import mcp_manager
 from src.mcp_core.skills import get_skills_block
 from src.plugins.core_tools import AVAILABLE_PLUGINS
 
@@ -95,23 +92,6 @@ def _build_system_block() -> str:
 
         logging.getLogger(__name__).debug("sysinfo block error: %s", _e)
         return "## System\n- Info sistem tak tersedia."
-
-
-def _get_remote_tools() -> list:
-    """Cache remote MCP tools selama 5 menit agar tidak blok tiap request."""
-    now = time.time()
-    if _REMOTE_CACHE["tools"] is not None and (now - _REMOTE_CACHE["ts"]) < _REMOTE_CACHE_TTL:
-        return _REMOTE_CACHE["tools"]
-    try:
-        tools = asyncio.run(mcp_manager.list_all_tools())
-    except Exception as _e:
-        import logging
-
-        logging.getLogger(__name__).debug("MCP remote tools error: %s", _e)
-        tools = []
-    _REMOTE_CACHE["tools"] = tools
-    _REMOTE_CACHE["ts"] = now
-    return tools
 
 
 def _build_environment() -> str:

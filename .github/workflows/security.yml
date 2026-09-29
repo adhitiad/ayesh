@@ -42,6 +42,10 @@ jobs:
   tests:
     name: Security Regression Tests
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://ayesh_test:test@localhost:5432/ayesh_test
+      REDIS_URL: redis://localhost:6379/0
+      NVIDIA_API_KEY: test-placeholder
     services:
       postgres:
         image: postgres:15
@@ -71,8 +75,12 @@ jobs:
         with:
           python-version: '3.13'
       - run: pip install -r requirements-lock.txt
+      - name: Buat schema test
+        run: |
+          python -c "
+          from src.core.db.db_engine import get_engine
+          from src.core.db.models import Base
+          Base.metadata.create_all(get_engine())
+          print('DB schema created')
+          "
       - run: python -m unittest discover -s tests -v
-        env:
-          DATABASE_URL: postgres://ayesh_test:test@localhost:5432/ayesh_test
-          REDIS_URL: redis://localhost:6379/0
-          NVIDIA_API_KEY: test-placeholder

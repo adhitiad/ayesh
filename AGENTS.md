@@ -11,7 +11,7 @@ Multi-agent AI orchestrator (Indonesian). Identity: **Ayesh** ("Aku adalah Ayesh
 - Redis must be running locally (`redis://localhost:6379/0`) — memory layer depends on it. NOTE: local Redis is old (no RESP3) — clients must use `protocol=2` (see monkey-patch quirk below; `bootstrap.py` checks with RESP2).
 
 ## Linting
-- Run `ruff check .` before committing (config in `.ruff.toml`). All 749 tests must pass: `python -m unittest discover -s tests` (atau `venv\Scripts\python.exe -m unittest ...`).
+- Run `ruff check .` before committing (config in `.ruff.toml`). All 750 tests must pass: `python -m unittest discover -s tests` (atau `venv\Scripts\python.exe -m unittest ...`).
 - Bandit: `python -m bandit -r src/` — must report 0 issues (false positives annotated `# nosec `, see the `_SENSITIVE_PATTERNS` block in `error_handling.py`).
 - mypy: config di `pyproject.toml [tool.mypy]` (bukan `mypy.ini` — file itu sudah tidak ada): lenient baseline (`ignore_missing_imports` + noise codes off) — NOT a gate. Baseline terukur 2026-09-26 dengan mypy 2.3.1: **21 error / 180 file** (mayoritas `no-any-return` + 3 `no-redef`). Jangan kejar 0; cukup **tidak menambah error baru**. Do not disable semantic codes to force a pass. New code should keep types clean; shrinking the baseline incrementally is the goal.
 
@@ -134,7 +134,7 @@ Multi-agent AI orchestrator (Indonesian). Identity: **Ayesh** ("Aku adalah Ayesh
 - `manage_keywords.py` — CLI for managing routing keywords in DB.
 - `.ayesh/` — prompt content bundle: `skills/` (invokable skills) + `rules/` (SOP/policy markdown).
 - `data/*.txt` — RAG source documents. Re-ingest after editing.
-- `tests/` — 749 tests (unittest, fast, no LLM/infra) + end-to-end eval + security regression.
+- `tests/` — 750 tests (unittest, fast, no LLM/infra) + end-to-end eval + security regression.
 - `tests/load/locustfile.py` — load test Locust: user infra (`/health`, `/metrics`, `/metrics/prometheus`) + opsional `POST /chat` bila `LOADTEST_CHAT=1`. Run: server hidup dulu, lalu `locust -f tests/load/locustfile.py --host http://localhost:8080 -u 10 -r 2 -t 60s --headless --csv=load_results`. 429 (rate limit) dihitung terpisah, bukan failure. Dependensi: `locust` di `requirements.txt`.
 - **Mutation testing**: `mutmut` 2.x (di-pin `>=2.5.1,<3` di `requirements.txt` — v3 tidak jalan native di Windows, issue boxed/mutmut#397; WSL hanya fallback). Config `[tool.mutmut]` di `pyproject.toml` (default mutate `src/core/llm/task_routing.py`, runner = interpreter venv eksplisit karena `python` di PATH bisa saja alias Store/beda env). Per modul lain: `.\venv\Scripts\mutmut.exe run --paths-to-mutate src/...` (di Linux/WSL: `--runner "venv/bin/python -m pytest -x --assert=plain"`). Hasil: `mutmut results`, diff: `mutmut results <id>`, HTML: `mutmut html`. Gate CI: `mutmut jenkins` (exit≠0 bila ada survived). Cache di `.mutmut-cache` (gitignored). Baseline `task_routing.py`: 61 mutant, **55 killed (90%)**; 6 survivor tersisa = mutant setara (alias default/`or` identik perilaku, mustahil dibunuh test).
 - `tests/factories.py` — factory_boy factories untuk semua model ORM (`factory build()` tanpa infra; DB-session opt-in via `tests/conftest.py` + `pytest_factoryboy.register`). Test: `tests/test_factories.py` (unittest, no-DB). Dependensi test: `factory-boy`, `pytest-factoryboy` di `requirements.txt`.

@@ -120,7 +120,7 @@ class User(Base):
     id = Column(String(36), primary_key=True)
     name = Column(String(100), nullable=False)
     key_hash = Column(String(128), nullable=False, unique=True)
-    prefix = Column(String(10), nullable=False, server_default="")
+    prefix = Column(String(20), nullable=False, server_default="")
     role = Column(String(10), nullable=False, server_default="user")
     active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime, nullable=False, server_default="NOW()")

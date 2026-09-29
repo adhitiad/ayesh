@@ -22,7 +22,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      DATABASE_URL: sqlite:///./ci_structural.db
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agent
+      REDIS_URL: redis://localhost:6379/0
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -37,6 +59,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-lock.txt
+
+      - name: Wait for services
+        run: |
+          sleep 5
+          pg_isready -h localhost -p 5432 -U postgres
+          python -c "import redis; assert redis.from_url('redis://localhost:6379/0').ping(); print('redis ok')"
+
+      - name: Run database migrations
+        run: |
+          python -c "
+          from src.core.db.db_engine import get_engine
+          from src.core.db.models import Base
+          Base.metadata.create_all(get_engine())
+          print('DB schema created')
+          "
 
       - name: Run structural tests
         run: |

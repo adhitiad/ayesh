@@ -76,25 +76,36 @@ def with_retry(max_retries=3, base_delay=0.5, max_delay=5.0):
 def _ensure_session_memory_columns() -> None:
     """Tambah/ubah kolom pada tabel session_memory agar sinkron dengan model (backward-compat)."""
     _log = logging.getLogger("db_engine")
-    with engine.connect() as conn:
-        cols = {
-            row[0]: row[1]
-            for row in conn.execute(
-                text("SELECT column_name, data_type FROM information_schema.columns WHERE table_name='session_memory'")
-            ).fetchall()
-        }
-        changed = False
-        if "owner_user_id" not in cols:
-            conn.execute(text("ALTER TABLE session_memory ADD COLUMN owner_user_id VARCHAR(36) NOT NULL DEFAULT ''"))
-            changed = True
-        if cols.get("id") == "integer":
-            conn.execute(text("ALTER TABLE session_memory DROP CONSTRAINT IF EXISTS session_memory_pkey CASCADE"))
-            conn.execute(text("ALTER TABLE session_memory ALTER COLUMN id TYPE VARCHAR(36) USING id::text"))
-            conn.execute(text("ALTER TABLE session_memory ADD PRIMARY KEY (id)"))
-            changed = True
-        if changed:
-            conn.commit()
-            _log.info("session_memory: schema migrated to match model")
+    try:
+        with engine.connect() as conn:
+            cols = {
+                row[0]: row[1]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name, data_type FROM information_schema.columns WHERE table_name='session_memory'"
+                    )
+                ).fetchall()
+            }
+            if not cols:
+                return
+            changed = False
+            if "owner_user_id" not in cols:
+                conn.execute(
+                    text("ALTER TABLE session_memory ADD COLUMN owner_user_id VARCHAR(36) NOT NULL DEFAULT ''")
+                )
+                changed = True
+            if cols.get("id") == "integer":
+                conn.execute(text("ALTER TABLE session_memory DROP CONSTRAINT IF EXISTS session_memory_pkey CASCADE"))
+                conn.execute(text("ALTER TABLE session_memory ALTER COLUMN id TYPE VARCHAR(36) USING id::text"))
+                conn.execute(text("ALTER TABLE session_memory ADD PRIMARY KEY (id)"))
+                changed = True
+            if changed:
+                conn.commit()
+                _log.info("session_memory: schema migrated to match model")
+    except Exception:
+        # Tabel belum ada (DB baru) atau dialek non-PG: dilewati, create_all/alembic
+        # yang membangun schema; kegagalan nyata tetap tercatat di log (bukan ditelan).
+        _log.exception("session_memory: migrasi schema dilewati")
 
 
 _ensure_session_memory_columns()

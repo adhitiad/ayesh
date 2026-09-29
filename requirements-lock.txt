@@ -146,7 +146,7 @@ python-engineio==4.14.0
 python-multipart==0.0.32
 python-pptx==1.0.2
 python-socketio==5.17.0
-pywin32==312
+pywin32==312; sys_platform == "win32"
 PyYAML==6.0.3
 pyzmq==27.2.0
 redis==8.1.0
